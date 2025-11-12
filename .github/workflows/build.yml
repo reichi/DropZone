@@ -1,0 +1,38 @@
+name: Build DropZoneApp
+
+on:
+  workflow_dispatch: {}
+  push:
+    branches: [ main, master ]
+
+jobs:
+  build:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: DropZoneApp   # <— WICHTIG: Ordner, in dem die .csproj liegt
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET 8 SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: dotnet --info
+        run: dotnet --info
+
+      - name: Restore
+        run: dotnet restore DropZoneApp.csproj
+
+      - name: Publish win-x64 (self-contained, SingleFile)
+        run: dotnet publish DropZoneApp.csproj -c Release -r win-x64 -p:PublishSingleFile=true --self-contained true
+
+      - name: Artefakt hochladen (EXE + Dateien)
+        uses: actions/upload-artifact@v4
+        with:
+          name: DropZoneApp_win-x64_publish
+          path: bin/Release/net8.0-windows/win-x64/publish
+          if-no-files-found: error
+          retention-days: 14
