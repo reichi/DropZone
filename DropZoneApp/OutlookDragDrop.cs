@@ -142,7 +142,7 @@ namespace DropZoneApp
                     comObj.GetData(ref fmt, out ComTypes.STGMEDIUM med);
                     try
                     {
-                        if (med.tymed == ComTypes.TYMED.ISTREAM || med.tymed == ComTypes.TYMED.TYMED_ISTREAM)
+                        if (med.tymed == ComTypes.TYMED.TYMED_ISTREAM)
                         {
                             var unk = med.unionmember;
                             if (unk != IntPtr.Zero)
