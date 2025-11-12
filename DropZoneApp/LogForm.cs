@@ -36,31 +36,56 @@ namespace DropZoneApp
             _autoScroll = new CheckBox { Text = "Auto-Scroll", Dock = DockStyle.Top, Checked = true };
 
             var btnPanel = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 36, FlowDirection = FlowDirection.LeftToRight };
+
             _btnOpen = new Button { Text = "Im Explorer öffnen" };
             _btnOpen.Click += BtnOpen_Click;
+
             _btnCopy = new Button { Text = "Alles kopieren" };
             _btnCopy.Click += BtnCopy_Click;
+
             _btnClear = new Button { Text = "Log leeren" };
             _btnClear.Click += BtnClear_Click;
 
-            btnPanel.Controls.AddRange(new Control[] { _btnOpen, _btnCopy, _btnClear });
+            btnPanel.Controls.Add(_btnOpen);
+            btnPanel.Controls.Add(_btnCopy);
+            btnPanel.Controls.Add(_btnClear);
 
-            Controls.AddRange(new Control[] { _rtb, btnPanel, _autoScroll });
+            Controls.Add(_rtb);
+            Controls.Add(btnPanel);
+            Controls.Add(_autoScroll);
 
-            Load += (s,e) =>
-            {
-                string[] lines = Log.ReadAll();
-                if (lines.Length > 0)
-                {
-                    _rtb.AppendText(string.Join(Environment.NewLine, lines));
-                    _rtb.AppendText(Environment.NewLine);
-                }
-            };
-            FormClosed += (s,e) => Log.LineAdded -= OnLogLine;
-            FormClosing += (s,e) => { if (e.CloseReason == CloseReason.UserClosing) { e.Cancel = true; Hide(); } };
+            Load += LogForm_Load;
+            FormClosed += LogForm_FormClosed;
+            FormClosing += LogForm_FormClosing;
 
             Log.LineAdded += OnLogLine;
         }
+
+        private void LogForm_Load(object? sender, EventArgs e)
+        {
+            string[] lines = Log.ReadAll();
+            if (lines.Length > 0)
+            {
+                _rtb.AppendText(string.Join(Environment.NewLine, lines));
+                _rtb.AppendText(Environment.NewLine);
+            }
+        }
+
+        private void LogForm_FormClosed(object? sender, EventArgs e)
+        {
+            Log.LineAdded -= OnLogLine;
+        }
+
+        private void LogForm_FormClosing(object? sender, FormClosingEventArgs e)
+        {
+            if (e.CloseReason == CloseReason.UserClosing)
+            {
+                e.Cancel = true;
+                Hide();
+            }
+        }
+
+        private static string Quote(string s) => "\"" + s + "\"";
 
         private void BtnOpen_Click(object? sender, EventArgs e)
         {
@@ -68,9 +93,16 @@ namespace DropZoneApp
             {
                 string p = Log.GetLogPath();
                 if (File.Exists(p))
-                    Process.Start(new ProcessStartInfo("explorer.exe", "/select,"" + p + """) { UseShellExecute = true });
+                {
+                    var psi = new ProcessStartInfo("explorer.exe", "/select," + Quote(p)) { UseShellExecute = true };
+                    Process.Start(psi);
+                }
                 else
-                    Process.Start(new ProcessStartInfo("explorer.exe", Path.GetDirectoryName(p) ?? Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments)) { UseShellExecute = true });
+                {
+                    string dir = Path.GetDirectoryName(p) ?? Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
+                    var psi = new ProcessStartInfo("explorer.exe", dir) { UseShellExecute = true };
+                    Process.Start(psi);
+                }
             }
             catch { }
         }
