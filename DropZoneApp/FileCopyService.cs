@@ -112,13 +112,23 @@ namespace DropZoneApp
 
         public static string SanitizeName(string name)
         {
+            if (string.IsNullOrWhiteSpace(name)) return "unnamed";
+
+            // Leerzeichen → Unterstrich
             var s = name.Replace(' ', '_');
-            foreach (var c in Path.GetInvalidFileNameChars()) s = s  # placeholder
-            # Fix invalid char replacement properly
-            s2 = s
-            for ch in ['<','>',':','"','/','\','|','?','*']:
-                s2 = s2.replace(ch, '_')
-            return s2.strip().rstrip('.')
+
+            // Ungültige OS-Zeichen ersetzen
+            foreach (var c in Path.GetInvalidFileNameChars())
+                s = s.Replace(c, '_');
+
+            // Sicher extra Sonderzeichen ersetzen (falls nicht im obigen Set)
+            char[] extra = { '<','>',':','"','/','\\','|','?','*' };
+            foreach (var ch in extra)
+                s = s.Replace(ch, '_');
+
+            s = s.Trim().TrimEnd('.');
+            if (s.Length == 0) s = "unnamed";
+            return s;
         }
     }
 }
