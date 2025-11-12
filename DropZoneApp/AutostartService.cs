@@ -48,7 +48,7 @@ namespace DropZoneApp
                     if (enable)
                     {
                         var exe = Application.ExecutablePath;
-                        key.SetValue(ValueName, """ + exe + "" " + ExtraArgs);
+                        key.SetValue(ValueName, "\"" + exe + "\" " + ExtraArgs);
                     }
                     else key.DeleteValue(ValueName, false);
                     return true;
@@ -69,7 +69,7 @@ namespace DropZoneApp
                 }
 
                 var exe = Application.ExecutablePath;
-                var dir = Path.GetDirectoryName(exe) ?? "";
+                var dir = Path.GetDirectoryName(exe) ?? string.Empty;
                 var type = Type.GetTypeFromProgID("WScript.Shell");
                 if (type == null) return false;
                 var shell = Activator.CreateInstance(type);
