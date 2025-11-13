@@ -12,9 +12,9 @@ namespace DropZoneApp
         private readonly AppConfig _config;
         private readonly MainForm _host;
         private System.Windows.Forms.Timer? _blinkTimer;
-        private bool _dragActive;
 
-        private System.Windows.Forms.Timer? _clickThroughTimer;
+        private bool _dragActive;
+        private System.Windows.Forms.Timer? _hoverTimer; // proaktives Umschalten
 
         [DllImport("user32.dll", SetLastError = true)]
         private static extern int GetWindowLong(IntPtr hWnd, int nIndex);
@@ -32,9 +32,9 @@ namespace DropZoneApp
 
         private void SetClickThrough(bool enable)
         {
+            if (!IsHandleCreated) return;
             try
             {
-                if (!IsHandleCreated) return;
                 int ex = GetWindowLong(this.Handle, GWL_EXSTYLE);
                 int newEx = enable ? (ex | WS_EX_TRANSPARENT) : (ex & ~WS_EX_TRANSPARENT);
                 if (newEx != ex)
@@ -50,8 +50,9 @@ namespace DropZoneApp
         private bool ShouldClickThrough()
         {
             if (_dragActive) return false;
-            if (Control.MouseButtons != MouseButtons.None) return false;
-            if ((ModifierKeys & Keys.Control) == Keys.Control) return false;
+            bool inside = Bounds.Contains(Cursor.Position);
+            bool mouseDown = Control.MouseButtons != MouseButtons.None;
+            if (inside && mouseDown) return false; // wichtig für DragEnter
             return true;
         }
 
@@ -115,10 +116,9 @@ namespace DropZoneApp
                 await HandleDropAsync(e.Data!);
             };
 
-            // NEU: Poll-Timer wie beim Dock – sorgt dafür, dass DragEnter überhaupt ankommt
-            _clickThroughTimer = new System.Windows.Forms.Timer { Interval = 60 };
-            _clickThroughTimer.Tick += (_, __) => UpdateClickThrough();
-            _clickThroughTimer.Start();
+            _hoverTimer = new System.Windows.Forms.Timer { Interval = 40 };
+            _hoverTimer.Tick += (_, __) => UpdateClickThrough();
+            _hoverTimer.Start();
 
             Shown += (s, e) => UpdateClickThrough();
             HandleCreated += (s, e) => UpdateClickThrough();
@@ -138,6 +138,7 @@ namespace DropZoneApp
             try
             {
                 await _host.ProcessDropAsync(data, null, null, true);
+                if (_config.HotCornerBlink) Blink();
                 if (_config.Notifications) Toast.Show("DropZone", "Ablage abgeschlossen", 3000);
             }
             catch { }
@@ -145,7 +146,7 @@ namespace DropZoneApp
 
         public void ApplyConfig()
         {
-            Width = Math.Max(4, _config.HotCornerSize);
+            Width  = Math.Max(4, _config.HotCornerSize);
             Height = Math.Max(4, _config.HotCornerSize);
             Opacity = Math.Max(0.01, Math.Min(1.0, _config.HotCornerOpacity));
             ApplyPosition();
@@ -175,7 +176,6 @@ namespace DropZoneApp
         {
             try
             {
-                if (!_config.HotCornerBlink) return;
                 double orig = Opacity;
                 double target = Math.Min(1.0, Math.Max(orig, orig * 4.0));
                 Opacity = target;
