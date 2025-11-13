@@ -3,6 +3,7 @@ using System.Drawing;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 using System.Drawing.Drawing2D;
+using System.Runtime.InteropServices;
 
 namespace DropZoneApp
 {
@@ -20,30 +21,96 @@ namespace DropZoneApp
         private System.Windows.Forms.Timer? _pulseTimer;
         private int _pulseElapsed;
 
-        [System.Runtime.InteropServices.DllImport("user32.dll")]
-        private static extern short GetKeyState(int nVirtKey);
-        private const int VK_LBUTTON = 0x01;
+        // --- P/Invoke für Extended Window Styles (Click-Through) ---
+        private const int GWL_EXSTYLE = -20;
+        private const int WS_EX_TRANSPARENT = 0x00000020;
 
+        [DllImport("user32.dll", SetLastError = true)]
+        private static extern int GetWindowLong(IntPtr hWnd, int nIndex);
+
+        [DllImport("user32.dll", EntryPoint = "GetWindowLongPtr", SetLastError = true)]
+        private static extern IntPtr GetWindowLongPtr64(IntPtr hWnd, int nIndex);
+
+        [DllImport("user32.dll", EntryPoint = "SetWindowLong", SetLastError = true)]
+        private static extern int SetWindowLong32(IntPtr hWnd, int nIndex, int dwNewLong);
+
+        [DllImport("user32.dll", EntryPoint = "SetWindowLongPtr", SetLastError = true)]
+        private static extern IntPtr SetWindowLongPtr64(IntPtr hWnd, int nIndex, IntPtr dwNewLong);
+
+        [DllImport("user32.dll", SetLastError = true)]
+        private static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter,
+            int X, int Y, int cx, int cy, uint uFlags);
+
+        private const uint SWP_NOSIZE = 0x0001;
+        private const uint SWP_NOMOVE = 0x0002;
+        private const uint SWP_NOZORDER = 0x0004;
+        private const uint SWP_FRAMECHANGED = 0x0020;
+
+        private static int GetExStyle(IntPtr hWnd)
+        {
+            if (IntPtr.Size == 8) return (int)GetWindowLongPtr64(hWnd, GWL_EXSTYLE);
+            return GetWindowLong(hWnd, GWL_EXSTYLE);
+        }
+
+        private static void SetExStyle(IntPtr hWnd, int exStyle)
+        {
+            if (hWnd == IntPtr.Zero) return;
+            if (IntPtr.Size == 8)
+                SetWindowLongPtr64(hWnd, GWL_EXSTYLE, new IntPtr(exStyle));
+            else
+                SetWindowLong32(hWnd, GWL_EXSTYLE, exStyle);
+
+            SetWindowPos(hWnd, IntPtr.Zero, 0, 0, 0, 0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
+        }
+
+        private void SetClickThrough(bool enable)
+        {
+            if (!IsHandleCreated) return;
+
+            void apply(IntPtr handle)
+            {
+                int ex = GetExStyle(handle);
+                int newEx = enable ? (ex | WS_EX_TRANSPARENT) : (ex & ~WS_EX_TRANSPARENT);
+                if (newEx != ex) SetExStyle(handle, newEx);
+            }
+
+            apply(Handle);
+            foreach (Control c in Controls)
+                if (c.IsHandleCreated) apply(c.Handle);
+
+            _status.Enabled = !enable;
+            _progress.Enabled = !enable;
+        }
+
+        private bool ShouldClickThrough()
+        {
+            if (!_config.DockClickThrough) return false;
+            if (_dragActive) return false;
+            if ((ModifierKeys & Keys.Control) == Keys.Control) return false;
+            if (Control.MouseButtons != MouseButtons.None) return false;
+            return true;
+        }
+
+        private void UpdateClickThroughState() => SetClickThrough(ShouldClickThrough());
+
+        // Für STRG-Verschieben und HTTRANSPARENT-Fallback
         protected override void WndProc(ref Message m)
         {
             const int WM_NCHITTEST = 0x0084;
-            const int HTTRANSPARENT = -1;
             const int HTCAPTION = 2;
+            const int HTTRANSPARENT = -1;
 
             if (m.Msg == WM_NCHITTEST)
             {
-                bool ctrlDown = (ModifierKeys & Keys.Control) == Keys.Control;
-                bool leftDown = (GetKeyState(VK_LBUTTON) & 0x8000) != 0;
-
-                if (ctrlDown)
+                if ((ModifierKeys & Keys.Control) == Keys.Control)
                 {
-                    m.Result = (IntPtr)HTCAPTION; // CTRL: free move
+                    m.Result = (IntPtr)HTCAPTION; // drag-move
                     return;
                 }
-
-                if (_config.DockClickThrough && !_dragActive && !leftDown)
+                if (ShouldClickThrough())
                 {
-                    m.Result = (IntPtr)HTTRANSPARENT; // click-through
+                    m.Result = (IntPtr)HTTRANSPARENT; // Maus an Fenster darunter
                     return;
                 }
             }
@@ -62,7 +129,7 @@ namespace DropZoneApp
             Opacity = Math.Clamp(_config.DockOpacity, 0.1, 1.0);
             BackColor = Color.White;
             StartPosition = FormStartPosition.Manual;
-            Size = new Size(Math.Max(60, _config.DockWidth), Math.Max(80, _config.DockHeight));
+            Size = new Size(Math.max(60, _config.DockWidth), Math.max(80, _config.DockHeight));
 
             if (_config.DockLeft.HasValue && _config.DockTop.HasValue)
                 Location = new Point(_config.DockLeft.Value, _config.DockTop.Value);
@@ -83,34 +150,49 @@ namespace DropZoneApp
 
             Paint += DockForm_Paint;
 
-            DragEnter += (s, e) => { _dragActive = true; e.Effect = HasSupportedFormats(e.Data) ? DragDropEffects.Copy : DragDropEffects.None; };
-            DragLeave += (s, e) => { _dragActive = false; };
-            DragDrop  += async (s, e) => { _dragActive = false; await HandleDropAsync(e.Data!); };
+            DragEnter += (s, e) =>
+            {
+                _dragActive = true;
+                UpdateClickThroughState();
+                e.Effect = HasSupportedFormats(e.Data) ? DragDropEffects.Copy : DragDropEffects.None;
+            };
+            DragLeave += (s, e) => { _dragActive = false; UpdateClickThroughState(); };
+            DragDrop += async (s, e) =>
+            {
+                _dragActive = false; UpdateClickThroughState();
+                await HandleDropAsync(e.Data!);
+            };
 
             Move += (_, __) => SavePosition();
             Resize += (_, __) => SaveSize();
 
             DoubleClick += (_, __) => { _host.Show(); _host.Activate(); };
-            MouseDown += DockForm_MouseDown;
-            MouseUp   += (_, __) => { _moving = false; };
-            MouseMove += DockForm_MouseMove;
-        }
 
-        private void DockForm_MouseDown(object? sender, MouseEventArgs e)
-        {
-            if ((ModifierKeys & Keys.Control) == Keys.Control && e.Button == MouseButtons.Left)
+            MouseDown += (s, e) =>
             {
-                _moving = true;
-                _moveOffset = new Point(e.X, e.Y);
-            }
-        }
-        private void DockForm_MouseMove(object? sender, MouseEventArgs e)
-        {
-            if (_moving)
+                if ((ModifierKeys & Keys.Control) == Keys.Control && e.Button == MouseButtons.Left)
+                {
+                    _moving = true;
+                    _moveOffset = new Point(e.X, e.Y);
+                }
+                UpdateClickThroughState();
+            };
+            MouseUp += (s, e) =>
             {
-                var screenPos = PointToScreen(new Point(e.X, e.Y));
-                Location = new Point(screenPos.X - _moveOffset.X, screenPos.Y - _moveOffset.Y);
-            }
+                _moving = false;
+                UpdateClickThroughState();
+            };
+            MouseMove += (s, e) =>
+            {
+                if (_moving)
+                {
+                    var screenPos = PointToScreen(new Point(e.X, e.Y));
+                    Location = new Point(screenPos.X - _moveOffset.X, screenPos.Y - _moveOffset.Y);
+                }
+            };
+
+            HandleCreated += (_, __) => UpdateClickThroughState();
+            Shown += (_, __) => UpdateClickThroughState();
         }
 
         private static bool HasSupportedFormats(IDataObject? data)
@@ -144,6 +226,7 @@ namespace DropZoneApp
                 Size = new Size(_config.DockWidth, _config.DockHeight);
             if (_config.DockLeft.HasValue && _config.DockTop.HasValue)
                 Location = new Point(_config.DockLeft.Value, _config.DockTop.Value);
+            UpdateClickThroughState();
             Invalidate();
         }
 
@@ -161,6 +244,9 @@ namespace DropZoneApp
                     triggerNotifications: true);
 
                 if (_config.PulseAnimation) StartPulse();
+
+                // Fallback-Toast (falls MainForm keine Benachrichtigung zeigt)
+                if (_config.Notifications) Toast.Show("DropZone", "Ablage abgeschlossen", 3000);
             }
             catch (Exception ex)
             {
@@ -172,6 +258,7 @@ namespace DropZoneApp
             {
                 _progress.Style = ProgressBarStyle.Continuous;
                 _progress.Value = 0;
+                UpdateClickThroughState();
             }
         }
 
@@ -196,8 +283,10 @@ namespace DropZoneApp
             g.SmoothingMode = SmoothingMode.AntiAlias;
             var r = new Rectangle(6, 6, ClientSize.Width - 12, ClientSize.Height - 30);
             var baseColor = ColorUtil.FromHex(_config.DockBorderColorHex, Color.Gray);
-            using var penBase = new Pen(baseColor, Math.Max(1, _config.DockBorderThickness)) { DashStyle = DashStyle.Dash };
-            GraphicsUtil.DrawRoundedRectangle(g, penBase, r, 12);
+            using (var penBase = new Pen(baseColor, Math.Max(1, _config.DockBorderThickness)) { DashStyle = DashStyle.Dash })
+            {
+                GraphicsUtil.DrawRoundedRectangle(g, penBase, r, 12);
+            }
 
             try
             {
@@ -224,7 +313,7 @@ namespace DropZoneApp
                 int alpha = (int)(80 * amp);
                 int extra = (int)Math.Ceiling(4 * amp);
                 using var penPulse = new Pen(ColorUtil.WithAlpha(baseColor, 60 + alpha), Math.Max(1, _config.DockBorderThickness + extra));
-                GraphicsUtil.DrawRoundedRectangle(g, penPulse, new Rectangle(r.X-1, r.Y-1, r.Width+2, r.Height+2), 14);
+                GraphicsUtil.DrawRoundedRectangle(g, penPulse, new Rectangle(r.X - 1, r.Y - 1, r.Width + 2, r.Height + 2), 14);
             }
         }
     }
