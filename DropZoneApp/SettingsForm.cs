@@ -28,7 +28,6 @@ namespace DropZoneApp
         private NumericUpDown _numHotSize = null!;
         private NumericUpDown _numHotOpacity = null!;
         private NumericUpDown _numHotIcon = null!;
-        private CheckBox _chkHotBlink = null!;
         private ComboBox _cmbMonitors = null!;
 
         public SettingsForm(AppConfig config, Action? applyNow = null)
@@ -40,29 +39,41 @@ namespace DropZoneApp
             FormBorderStyle = FormBorderStyle.FixedDialog;
             StartPosition = FormStartPosition.CenterScreen;
             MaximizeBox = MinimizeBox = false;
-            Width = 760; Height = 620;
+            Width = 760; Height = 640;
             TopMost = true;
 
-            var lbl1 = new Label { Text = "Zielordner:", Left = 12, Top = 18, Width = 120 };
-            _txtTarget = new TextBox { Left = 140, Top = 15, Width = 480, Text = _config.TargetFolder };
-            var btnBrowse = new Button { Left = 626, Top = 14, Width = 40, Text = "…" };
+            int leftCol = 12;
+            int rightCol = 380;
+            int rowY = 12;
+
+            // === Zielordner (oberste Zeile, volle Breite) ===
+            var lbl1 = new Label { Text = "Zielordner:", Left = leftCol, Top = rowY + 3, Width = 120 };
+            _txtTarget = new TextBox { Left = leftCol + 120, Top = rowY, Width = 500, Text = _config.TargetFolder };
+            var btnBrowse = new Button { Left = leftCol + 120 + 500 + 6, Top = rowY - 1, Width = 40, Text = "…" };
             btnBrowse.Click += (_, __) =>
             {
                 using var dlg = new FolderBrowserDialog { SelectedPath = Directory.Exists(_txtTarget.Text) ? _txtTarget.Text : _config.TargetFolder };
                 if (dlg.ShowDialog(this) == DialogResult.OK) _txtTarget.Text = dlg.SelectedPath;
             };
+            Controls.Add(lbl1); Controls.Add(_txtTarget); Controls.Add(btnBrowse);
 
-            var lbl2 = new Label { Text = "Aufräumen nach (Tagen):", Left = 12, Top = 58, Width = 180 };
-            _numDays = new NumericUpDown { Left = 198, Top = 55, Width = 80, Minimum = 1, Maximum = 3650, Value = Math.Max(1, _config.DaysToKeep) };
+            // zweite Zeile
+            rowY += 40;
+            var lbl2 = new Label { Text = "Aufräumen nach (Tagen):", Left = leftCol, Top = rowY + 3, Width = 180 };
+            _numDays = new NumericUpDown { Left = leftCol + 180, Top = rowY, Width = 80, Minimum = 1, Maximum = 3650, Value = Math.Max(1, _config.DaysToKeep) };
+            Controls.Add(lbl2); Controls.Add(_numDays);
 
-            var grpDZ = new GroupBox { Text = "Drop‑Zone", Left = 12, Top = 100, Width = 350, Height = 170 };
-            var lblDZIcon = new Label { Left = 12, Top = 24, Text = "Icongröße (px):", Width = 110 };
-            var numDZIcon = new NumericUpDown { Left = 130, Top = 20, Width = 80, Minimum = 16, Maximum = 256, Value = Math.Max(16, Math.Min(256, _config.IconSizeDropzone)) };
-            var btnDZColor = new Button { Left = 12, Top = 52, Width = 110, Text = "Rahmenfarbe…" };
-            var numDZThick = new NumericUpDown { Left = 130, Top = 52, Width = 80, Minimum = 1, Maximum = 12, Value = Math.Max(1, _config.DropBorderThickness) };
-            grpDZ.Controls.AddRange(new Control[] { lblDZIcon, numDZIcon, btnDZColor, numDZThick });
+            // === Allgemein (links, unterhalb des Ordnerbereichs) ===
+            rowY += 40;
+            var grpGeneral = new GroupBox { Text = "Allgemein", Left = leftCol, Top = rowY, Width = 350, Height = 90 };
+            _chkTop   = new CheckBox { Left = 12, Top = 25, Width = 220, Text = "Immer im Vordergrund", Checked = _config.AlwaysOnTop };
+            _chkNotif = new CheckBox { Left = 12, Top = 50, Width = 160, Text = "Benachrichtigungen", Checked = _config.Notifications };
+            _chkCloseToTray = new CheckBox { Left = 180, Top = 50, Width = 160, Text = "Schließen → Tray", Checked = _config.CloseToTray };
+            grpGeneral.Controls.AddRange(new Control[] { _chkTop, _chkNotif, _chkCloseToTray });
+            Controls.Add(grpGeneral);
 
-            var grpDock = new GroupBox { Text = "Dock (halbtransparent)", Left = 380, Top = 100, Width = 350, Height = 220 };
+            // === Dock (rechts oben) ===
+            var grpDock = new GroupBox { Text = "Dock (halbtransparent)", Left = rightCol, Top = rowY, Width = 350, Height = 220 };
             _chkDock = new CheckBox { Left = 12, Top = 22, Width = 180, Text = "Dock aktivieren", Checked = _config.DockEnabled };
             var lblDW = new Label { Left = 12, Top = 52, Text = "Breite:", Width = 60 };
             _numDockW = new NumericUpDown { Left = 80, Top = 48, Width = 80, Minimum = 30, Maximum = 1000, Value = Math.Max(30, _config.DockWidth) };
@@ -75,9 +86,21 @@ namespace DropZoneApp
             var btnDockColor = new Button { Left = 12, Top = 168, Width = 110, Text = "Rahmenfarbe…" };
             var numDockThick = new NumericUpDown { Left = 130, Top = 168, Width = 80, Minimum = 1, Maximum = 12, Value = Math.Max(1, _config.DockBorderThickness) };
             var _chkDockClick = new CheckBox { Left = 12, Top = 196, Width = 300, Text = "Klicks durchlassen (STRG=Verschieben)", Checked = _config.DockClickThrough };
-            grpDock.Controls.AddRange(new Control[] { _chkDock, lblDW, _numDockW, _numDockH, lblDO, _numDockOp, lblDIcon, _numDockIcon, btnDockColor, numDockThick, _chkDockClick });
+            grpDock.Controls.AddRange(new Control[] { _chkDock, lblDW, _numDockW, lblDH, _numDockH, lblDO, _numDockOp, lblDIcon, _numDockIcon, btnDockColor, numDockThick, _chkDockClick });
+            Controls.Add(grpDock);
 
-            var grpHot = new GroupBox { Text = "Hot Corner", Left = 12, Top = 280, Width = 350, Height = 220 };
+            // === Drop‑Zone (links Mitte) ===
+            rowY += grpGeneral.Height + 10;
+            var grpDZ = new GroupBox { Text = "Drop‑Zone", Left = leftCol, Top = rowY, Width = 350, Height = 170 };
+            var lblDZIcon = new Label { Left = 12, Top = 24, Text = "Icongröße (px):", Width = 110 };
+            var numDZIcon = new NumericUpDown { Left = 130, Top = 20, Width = 80, Minimum = 16, Maximum = 256, Value = Math.Max(16, Math.Min(256, _config.IconSizeDropzone)) };
+            var btnDZColor = new Button { Left = 12, Top = 52, Width = 110, Text = "Rahmenfarbe…" };
+            var numDZThick = new NumericUpDown { Left = 130, Top = 52, Width = 80, Minimum = 1, Maximum = 12, Value = Math.Max(1, _config.DropBorderThickness) };
+            grpDZ.Controls.AddRange(new Control[] { lblDZIcon, numDZIcon, btnDZColor, numDZThick });
+            Controls.Add(grpDZ);
+
+            // === Hot Corner (links unten) ===
+            var grpHot = new GroupBox { Text = "Hot Corner", Left = leftCol, Top = rowY + grpDZ.Height + 10, Width = 350, Height = 220 };
             _chkHot = new CheckBox { Left = 12, Top = 22, Width = 200, Text = "Hot Corner aktivieren", Checked = _config.HotCornerEnabled };
             var lblCorner = new Label { Left = 12, Top = 52, Text = "Ecke:", Width = 60 };
             _cmbCorner = new ComboBox { Left = 80, Top = 48, Width = 240, DropDownStyle = ComboBoxStyle.DropDownList };
@@ -94,54 +117,41 @@ namespace DropZoneApp
             var lblMon = new Label { Left = 12, Top = 188, Text = "Monitor:", Width = 80 };
             _cmbMonitors = new ComboBox { Left = 80, Top = 184, Width = 240, DropDownStyle = ComboBoxStyle.DropDownList };
             grpHot.Controls.AddRange(new Control[] { _chkHot, lblCorner, _cmbCorner, lblSize, _numHotSize, lblHotOp, _numHotOpacity, lblHotIcon, _numHotIcon, btnHotColor, numHotThick, lblMon, _cmbMonitors });
+            Controls.Add(grpHot);
 
-            var grpGeneral = new GroupBox { Text = "Allgemein", Left = 380, Top = 12, Width = 350, Height = 80 };
-            _chkTop   = new CheckBox { Left = 12, Top = 20, Width = 220, Text = "Immer im Vordergrund", Checked = _config.AlwaysOnTop };
-            _chkNotif = new CheckBox { Left = 12, Top = 45, Width = 160, Text = "Benachrichtigungen", Checked = _config.Notifications };
-            _chkCloseToTray = new CheckBox { Left = 180, Top = 45, Width = 160, Text = "Schließen → Tray", Checked = _config.CloseToTray };
-            grpGeneral.Controls.AddRange(new Control[] { _chkTop, _chkNotif, _chkCloseToTray });
+            // === Pulse-Optionen (rechts unten, unter Dock) ===
+            var btnPulse = new CheckBox { Text = "Pulse‑Animation", Left = rightCol, Top = grpDock.Bottom + 10, Width = 180, Checked = _config.PulseAnimation };
+            var lblPulse = new Label { Text = "Pulse‑Dauer (ms):", Left = rightCol, Top = grpDock.Bottom + 40, Width = 120 };
+            var numPulse = new NumericUpDown { Left = rightCol + 130, Top = grpDock.Bottom + 36, Width = 80, Minimum = 100, Maximum = 2000, Value = Math.Max(100, _config.PulseDurationMs) };
+            Controls.Add(btnPulse); Controls.Add(lblPulse); Controls.Add(numPulse);
 
-            var btnPulse = new CheckBox { Text = "Pulse‑Animation", Left = 380, Top = 330, Width = 180, Checked = _config.PulseAnimation };
-            var lblPulse = new Label { Text = "Pulse‑Dauer (ms):", Left = 380, Top = 360, Width = 120 };
-            var numPulse = new NumericUpDown { Left = 500, Top = 356, Width = 80, Minimum = 100, Maximum = 2000, Value = Math.Max(100, _config.PulseDurationMs) };
+            // === Log + Autostart + Close-Button ===
+            var btnLog = new Button { Text = "Log anzeigen …", Left = leftCol, Top = grpHot.Bottom + 10, Width = 120 };
+            var btnClose = new Button { Text = "Schließen", Left = rightCol + 250, Top = grpDock.Bottom + 80, Width = 96, DialogResult = DialogResult.OK };
+            _chkAuto = new CheckBox { Left = rightCol, Top = grpDock.Bottom + 80, Width = 220, Text = "Autostart", Checked = _config.AutoStart || AutostartService.IsEnabled() };
+            Controls.Add(btnLog); Controls.Add(_chkAuto); Controls.Add(btnClose);
 
-            var btnLog = new Button { Text = "Log anzeigen …", Left = 12, Top = 520, Width = 120 };
-            btnLog.Click += (_, __) => LogForm.ShowSingleton(this);
-
-            var btnClose = new Button { Text = "Schließen", Left = 634, Top = 560, Width = 96, DialogResult = DialogResult.OK };
-
-            Controls.AddRange(new Control[] {
-                grpGeneral, lbl1, _txtTarget, btnBrowse, lbl2, _numDays,
-                grpDZ, grpDock, grpHot, btnPulse, lblPulse, numPulse,
-                btnLog, btnClose
-            });
-
+            // === Events / Live-Save ===
             _txtTarget.TextChanged += (_, __) => { if (!string.IsNullOrWhiteSpace(_txtTarget.Text)) { Directory.CreateDirectory(_txtTarget.Text); _config.TargetFolder = _txtTarget.Text; _config.Save(); _applyNow?.Invoke(); } };
             _numDays.ValueChanged  += (_, __) => { _config.DaysToKeep = (int)_numDays.Value; _config.Save(); };
+
             _chkTop.CheckedChanged += (_, __) => { _config.AlwaysOnTop = _chkTop.Checked; _config.Save(); _applyNow?.Invoke(); };
             _chkNotif.CheckedChanged += (_, __) => { _config.Notifications = _chkNotif.Checked; _config.Save(); };
             _chkCloseToTray.CheckedChanged += (_, __) => { _config.CloseToTray = _chkCloseToTray.Checked; _config.Save(); };
-            _chkAuto = new CheckBox { Left = 380, Top = 300, Width = 220, Text = "Autostart", Checked = _config.AutoStart || AutostartService.IsEnabled() };
+
             _chkAuto.CheckedChanged += (_, __) => { _config.AutoStart = _chkAuto.Checked; AutostartService.Apply(_config.AutoStart); _config.Save(); };
-            Controls.Add(_chkAuto);
 
             _chkDock.CheckedChanged += (_, __) => { _config.DockEnabled = _chkDock.Checked; _config.Save(); _applyNow?.Invoke(); };
             _numDockW.ValueChanged  += (_, __) => { _config.DockWidth = (int)_numDockW.Value; _config.Save(); _applyNow?.Invoke(); };
             _numDockH.ValueChanged  += (_, __) => { _config.DockHeight = (int)_numDockH.Value; _config.Save(); _applyNow?.Invoke(); };
             _numDockOp.ValueChanged += (_, __) => { _config.DockOpacity = (double)_numDockOp.Value / 100.0; _config.Save(); _applyNow?.Invoke(); };
             _numDockIcon.ValueChanged += (_, __) => { _config.IconSizeDock = (int)_numDockIcon.Value; _config.Save(); _applyNow?.Invoke(); };
-            _chkDockClick.CheckedChanged += (_, __) => { _config.DockClickThrough = _chkDockClick.Checked; _config.Save(); _applyNow?.Invoke(); };
 
             _chkHot.CheckedChanged  += (_, __) => { _config.HotCornerEnabled = _chkHot.Checked; _config.Save(); _applyNow?.Invoke(); };
             _cmbCorner.SelectedIndexChanged += (_, __) => { _config.HotCornerCorner = _cmbCorner.SelectedItem?.ToString() ?? "TopLeft"; _config.Save(); _applyNow?.Invoke(); };
             _numHotSize.ValueChanged += (_, __) => { _config.HotCornerSize = (int)_numHotSize.Value; _config.Save(); _applyNow?.Invoke(); };
             _numHotOpacity.ValueChanged += (_, __) => { _config.HotCornerOpacity = (double)_numHotOpacity.Value / 100.0; _config.Save(); _applyNow?.Invoke(); };
             _numHotIcon.ValueChanged += (_, __) => { _config.IconSizeHotCorner = (int)_numHotIcon.Value; _config.Save(); _applyNow?.Invoke(); };
-
-            numDZIcon.ValueChanged += (_, __) => { _config.IconSizeDropzone = (int)numDZIcon.Value; _config.Save(); _applyNow?.Invoke(); };
-
-            btnPulse.CheckedChanged += (_, __) => { _config.PulseAnimation = btnPulse.Checked; _config.Save(); };
-            numPulse.ValueChanged += (_, __) => { _config.PulseDurationMs = (int)numPulse.Value; _config.Save(); };
 
             btnDZColor.Click += (_, __) =>
             {
@@ -179,8 +189,8 @@ namespace DropZoneApp
             };
             numHotThick.ValueChanged += (_, __) => { _config.HotBorderThickness = (int)numHotThick.Value; _config.Save(); _applyNow?.Invoke(); };
 
-            _cmbMonitors.Items.Clear();
             var screens = Screen.AllScreens;
+            _cmbMonitors.Items.Clear();
             for (int i = 0; i < screens.Length; i++)
             {
                 var s = screens[i];
@@ -189,6 +199,9 @@ namespace DropZoneApp
             int idx = Math.Max(0, Math.Min(_config.HotCornerMonitor, _cmbMonitors.Items.Count - 1));
             if (_cmbMonitors.Items.Count > 0) _cmbMonitors.SelectedIndex = idx;
             _cmbMonitors.SelectedIndexChanged += (_, __) => { _config.HotCornerMonitor = _cmbMonitors.SelectedIndex; _config.Save(); _applyNow?.Invoke(); };
+
+            btnPulse.CheckedChanged += (_, __) => { _config.PulseAnimation = btnPulse.Checked; _config.Save(); };
+            numPulse.ValueChanged += (_, __) => { _config.PulseDurationMs = (int)numPulse.Value; _config.Save(); };
         }
     }
 }
