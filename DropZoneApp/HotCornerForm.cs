@@ -1,9 +1,9 @@
 using System;
 using System.Drawing;
-using System.Windows.Forms;
 using System.Drawing.Drawing2D;
-using System.Runtime.InteropServices;
 using System.Threading.Tasks;
+using System.Windows.Forms;
+using System.Runtime.InteropServices;
 
 namespace DropZoneApp
 {
@@ -12,10 +12,40 @@ namespace DropZoneApp
         private readonly AppConfig _config;
         private readonly MainForm _host;
         private System.Windows.Forms.Timer? _blinkTimer;
-
         private bool _dragActive;
 
-        private System.Windows.Forms.Timer? _clickThroughTimer;
+        [DllImport("user32.dll", SetLastError = true)]
+        private static extern int GetWindowLong(IntPtr hWnd, int nIndex);
+        [DllImport("user32.dll", SetLastError = true)]
+        private static extern int SetWindowLong(IntPtr hWnd, int nIndex, int dwNewLong);
+        [DllImport("user32.dll", SetLastError = true)]
+        private static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int X, int Y, int cx, int cy, uint uFlags);
+
+        private const int GWL_EXSTYLE = -20;
+        private const int WS_EX_TRANSPARENT = 0x00000020;
+        private const uint SWP_NOSIZE = 0x0001;
+        private const uint SWP_NOMOVE = 0x0002;
+        private const uint SWP_NOZORDER = 0x0004;
+        private const uint SWP_FRAMECHANGED = 0x0020;
+
+        private void SetClickThrough(bool enable)
+        {
+            try
+            {
+                if (!IsHandleCreated) return;
+                int ex = GetWindowLong(this.Handle, GWL_EXSTYLE);
+                int newEx = enable ? (ex | WS_EX_TRANSPARENT) : (ex & ~WS_EX_TRANSPARENT);
+                if (newEx != ex)
+                {
+                    SetWindowLong(this.Handle, GWL_EXSTYLE, newEx);
+                    SetWindowPos(this.Handle, IntPtr.Zero, 0, 0, 0, 0,
+                        SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
+                }
+            }
+            catch { }
+        }
+
+        private void UpdateClickThrough() => SetClickThrough(!_dragActive);
 
         public HotCornerForm(AppConfig config, MainForm host)
         {
@@ -28,7 +58,7 @@ namespace DropZoneApp
             StartPosition = FormStartPosition.Manual;
 
             BackColor = Color.Black;
-            Opacity = ClampOpacity(_config.HotCornerOpacity);
+            Opacity = Math.Max(0.01, Math.Min(1.0, _config.HotCornerOpacity));
             Width = Math.Max(4, _config.HotCornerSize);
             Height = Math.Max(4, _config.HotCornerSize);
 
@@ -54,7 +84,7 @@ namespace DropZoneApp
                         size = Math.Max(8, size);
                         var dest = new Rectangle((ClientSize.Width - size) / 2, (ClientSize.Height - size) / 2, size, size);
                         var old = g.InterpolationMode;
-                        g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+                        g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
                         g.DrawImage(bmp, dest);
                         g.InterpolationMode = old;
                     }
@@ -62,15 +92,20 @@ namespace DropZoneApp
                 catch { }
             };
 
-            DragEnter += (s, e) => { _dragActive = true; UpdateClickThrough(); e.Effect = HasSupportedFormats(e.Data) ? DragDropEffects.Copy : DragDropEffects.None; };
+            DragEnter += (s, e) =>
+            {
+                _dragActive = true;
+                UpdateClickThrough();
+                e.Effect = HasSupportedFormats(e.Data) ? DragDropEffects.Copy : DragDropEffects.None;
+            };
             DragLeave += (s, e) => { _dragActive = false; UpdateClickThrough(); };
-            DragDrop  += async (s, e) => { _dragActive = false; UpdateClickThrough(); await HandleDropAsync(e.Data!); };
+            DragDrop += async (s, e) =>
+            {
+                _dragActive = false; UpdateClickThrough();
+                await HandleDropAsync(e.Data!);
+            };
 
-            // Click-Through zyklisch aktualisieren (STRG/Buttons/Drag)
-            _clickThroughTimer = new System.Windows.Forms.Timer { Interval = 120 };
-            _clickThroughTimer.Tick += (s, e) => UpdateClickThrough();
-            _clickThroughTimer.Start();
-
+            // Klicks nicht behandeln -> gehen durch
             Shown += (s, e) => UpdateClickThrough();
             HandleCreated += (s, e) => UpdateClickThrough();
         }
@@ -89,18 +124,16 @@ namespace DropZoneApp
             try
             {
                 await _host.ProcessDropAsync(data, null, null, true);
-                if (_config.HotCornerBlink) Blink();
+                if (_config.Notifications) Toast.Show("DropZone", "Ablage abgeschlossen", 3000);
             }
             catch { }
         }
 
-        private double ClampOpacity(double o) => Math.Max(0.01, Math.Min(1.0, o));
-
         public void ApplyConfig()
         {
-            Width  = Math.Max(4, _config.HotCornerSize);
+            Width = Math.Max(4, _config.HotCornerSize);
             Height = Math.Max(4, _config.HotCornerSize);
-            Opacity = ClampOpacity(_config.HotCornerOpacity);
+            Opacity = Math.Max(0.01, Math.Min(1.0, _config.HotCornerOpacity));
             ApplyPosition();
             TopMost = true;
             BringToFront();
@@ -128,6 +161,7 @@ namespace DropZoneApp
         {
             try
             {
+                if (!_config.HotCornerBlink) return;
                 double orig = Opacity;
                 double target = Math.Min(1.0, Math.Max(orig, orig * 4.0));
                 Opacity = target;
@@ -143,61 +177,6 @@ namespace DropZoneApp
                 _blinkTimer.Start();
             }
             catch { }
-        }
-
-        // ===== Click-Through (WS_EX_TRANSPARENT) =====
-
-        [DllImport("user32.dll", SetLastError = true)]
-        private static extern int GetWindowLong(IntPtr hWnd, int nIndex);
-        [DllImport("user32.dll", SetLastError = true)]
-        private static extern int SetWindowLong(IntPtr hWnd, int nIndex, int dwNewLong);
-
-        [DllImport("user32.dll")]
-        private static extern short GetKeyState(int nVirtKey);
-
-        private const int GWL_EXSTYLE      = -20;
-        private const int WS_EX_TRANSPARENT = 0x00000020;
-        private const int WS_EX_LAYERED     = 0x00080000;
-        private const int VK_LBUTTON        = 0x01;
-        private const int VK_CONTROL        = 0x11;
-
-        private bool ShouldClickThrough()
-        {
-            if (_dragActive) return false;                    // während Drag keinesfalls durchreichen
-            bool leftDown = (GetKeyState(VK_LBUTTON) & 0x8000) != 0;
-            if (leftDown) return false;
-            bool ctrlDown = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
-            if (ctrlDown) return false;
-            return true;
-        }
-
-        private void UpdateClickThrough()
-        {
-            bool enable = ShouldClickThrough();
-            try
-            {
-                int ex = GetWindowLong(this.Handle, GWL_EXSTYLE);
-                if (enable) ex |= WS_EX_TRANSPARENT | WS_EX_LAYERED;
-                else ex &= ~WS_EX_TRANSPARENT;
-                SetWindowLong(this.Handle, GWL_EXSTYLE, ex);
-            }
-            catch { }
-        }
-
-        protected override void WndProc(ref Message m)
-        {
-            const int WM_NCHITTEST = 0x0084;
-            const int HTTRANSPARENT = -1;
-
-            if (m.Msg == WM_NCHITTEST)
-            {
-                if (ShouldClickThrough())
-                {
-                    m.Result = (IntPtr)HTTRANSPARENT; // Maus an Fenster darunter
-                    return;
-                }
-            }
-            base.WndProc(ref m);
         }
     }
 }
