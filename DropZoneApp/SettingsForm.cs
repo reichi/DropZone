@@ -60,6 +60,15 @@ namespace DropZoneApp
             _chkTop   = new CheckBox { Left = 12, Top = 22, Width = 220, Text = "Immer im Vordergrund", Checked = _config.AlwaysOnTop };
             _chkNotif = new CheckBox { Left = 12, Top = 46, Width = 160, Text = "Benachrichtigungen", Checked = _config.Notifications };
             _chkCloseToTray = new CheckBox { Left = 180, Top = 46, Width = 160, Text = "Schließen → Tray", Checked = _config.CloseToTray };
+            var _chkMinToTray = new CheckBox { Left = 12, Top = 70, Width = 180,
+    Text = "Minimieren → Tray", Checked = _config.MinimizeToTray };
+grpGeneral.Controls.Add(_chkMinToTray);
+
+_chkMinToTray.CheckedChanged += (_, __) => {
+    _config.MinimizeToTray = _chkMinToTray.Checked;
+    _config.Save();
+};
+
             grpGeneral.Controls.AddRange(new Control[] { _chkTop, _chkNotif, _chkCloseToTray });
 
             // --- Drop‑Zone ---
