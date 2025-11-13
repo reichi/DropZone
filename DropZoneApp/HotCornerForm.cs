@@ -2,6 +2,7 @@ using System;
 using System.Drawing;
 using System.Windows.Forms;
 using System.Drawing.Drawing2D;
+using System.Runtime.InteropServices;
 using System.Threading.Tasks;
 
 namespace DropZoneApp
@@ -11,7 +12,10 @@ namespace DropZoneApp
         private readonly AppConfig _config;
         private readonly MainForm _host;
         private System.Windows.Forms.Timer? _blinkTimer;
+
         private bool _dragActive;
+
+        private System.Windows.Forms.Timer? _clickThroughTimer;
 
         public HotCornerForm(AppConfig config, MainForm host)
         {
@@ -58,11 +62,17 @@ namespace DropZoneApp
                 catch { }
             };
 
-            DragEnter += (s, e) => { _dragActive = true; e.Effect = HasSupportedFormats(e.Data) ? DragDropEffects.Copy : DragDropEffects.None; };
-            DragLeave += (s, e) => { _dragActive = false; };
-            DragDrop  += async (s, e) => { _dragActive = false; await HandleDropAsync(e.Data!); };
+            DragEnter += (s, e) => { _dragActive = true; UpdateClickThrough(); e.Effect = HasSupportedFormats(e.Data) ? DragDropEffects.Copy : DragDropEffects.None; };
+            DragLeave += (s, e) => { _dragActive = false; UpdateClickThrough(); };
+            DragDrop  += async (s, e) => { _dragActive = false; UpdateClickThrough(); await HandleDropAsync(e.Data!); };
 
-            Click += ActivateHost; // only click activates
+            // Click-Through zyklisch aktualisieren (STRG/Buttons/Drag)
+            _clickThroughTimer = new System.Windows.Forms.Timer { Interval = 120 };
+            _clickThroughTimer.Tick += (s, e) => UpdateClickThrough();
+            _clickThroughTimer.Start();
+
+            Shown += (s, e) => UpdateClickThrough();
+            HandleCreated += (s, e) => UpdateClickThrough();
         }
 
         private static bool HasSupportedFormats(IDataObject? data)
@@ -76,24 +86,42 @@ namespace DropZoneApp
 
         private async Task HandleDropAsync(IDataObject data)
         {
-            try { await _host.ProcessDropAsync(data, null, null, true); } catch { }
+            try
+            {
+                await _host.ProcessDropAsync(data, null, null, true);
+                if (_config.HotCornerBlink) Blink();
+            }
+            catch { }
         }
 
         private double ClampOpacity(double o) => Math.Max(0.01, Math.Min(1.0, o));
 
-        private void ActivateHost(object? sender, EventArgs e)
+        public void ApplyConfig()
         {
-            if (_dragActive) return;
-            try
+            Width  = Math.Max(4, _config.HotCornerSize);
+            Height = Math.Max(4, _config.HotCornerSize);
+            Opacity = ClampOpacity(_config.HotCornerOpacity);
+            ApplyPosition();
+            TopMost = true;
+            BringToFront();
+            Invalidate();
+            UpdateClickThrough();
+        }
+
+        private void ApplyPosition()
+        {
+            var screens = Screen.AllScreens;
+            int idx = Math.Max(0, Math.Min(_config.HotCornerMonitor, screens.Length - 1));
+            var wa = screens[idx].WorkingArea;
+            var corner = _config.HotCornerCorner ?? "TopLeft";
+            Point p = corner switch
             {
-                _host.Show();
-                _host.WindowState = FormWindowState.Normal;
-                _host.BringToFront();
-                _host.Activate();
-                if (_config.HotCornerBlink) Blink();
-                Log.Info("HotCorner: Hauptfenster aktiviert.");
-            }
-            catch { }
+                "TopRight"    => new Point(wa.Right - Width - 1, wa.Top + 1),
+                "BottomLeft"  => new Point(wa.Left + 1, wa.Bottom - Height - 1),
+                "BottomRight" => new Point(wa.Right - Width - 1, wa.Bottom - Height - 1),
+                _             => new Point(wa.Left + 1, wa.Top + 1),
+            };
+            Location = p;
         }
 
         private void Blink()
@@ -117,31 +145,59 @@ namespace DropZoneApp
             catch { }
         }
 
-        public void ApplyConfig()
+        // ===== Click-Through (WS_EX_TRANSPARENT) =====
+
+        [DllImport("user32.dll", SetLastError = true)]
+        private static extern int GetWindowLong(IntPtr hWnd, int nIndex);
+        [DllImport("user32.dll", SetLastError = true)]
+        private static extern int SetWindowLong(IntPtr hWnd, int nIndex, int dwNewLong);
+
+        [DllImport("user32.dll")]
+        private static extern short GetKeyState(int nVirtKey);
+
+        private const int GWL_EXSTYLE      = -20;
+        private const int WS_EX_TRANSPARENT = 0x00000020;
+        private const int WS_EX_LAYERED     = 0x00080000;
+        private const int VK_LBUTTON        = 0x01;
+        private const int VK_CONTROL        = 0x11;
+
+        private bool ShouldClickThrough()
         {
-            Width  = Math.Max(4, _config.HotCornerSize);
-            Height = Math.Max(4, _config.HotCornerSize);
-            Opacity = ClampOpacity(_config.HotCornerOpacity);
-            ApplyPosition();
-            TopMost = true;
-            BringToFront();
-            Invalidate();
+            if (_dragActive) return false;                    // während Drag keinesfalls durchreichen
+            bool leftDown = (GetKeyState(VK_LBUTTON) & 0x8000) != 0;
+            if (leftDown) return false;
+            bool ctrlDown = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
+            if (ctrlDown) return false;
+            return true;
         }
 
-        private void ApplyPosition()
+        private void UpdateClickThrough()
         {
-            var screens = Screen.AllScreens;
-            int idx = Math.Max(0, Math.Min(_config.HotCornerMonitor, screens.Length - 1));
-            var wa = screens[idx].WorkingArea;
-            var corner = _config.HotCornerCorner ?? "TopLeft";
-            Point p = corner switch
+            bool enable = ShouldClickThrough();
+            try
             {
-                "TopRight"    => new Point(wa.Right - Width - 1, wa.Top + 1),
-                "BottomLeft"  => new Point(wa.Left + 1, wa.Bottom - Height - 1),
-                "BottomRight" => new Point(wa.Right - Width - 1, wa.Bottom - Height - 1),
-                _             => new Point(wa.Left + 1, wa.Top + 1),
-            };
-            Location = p;
+                int ex = GetWindowLong(this.Handle, GWL_EXSTYLE);
+                if (enable) ex |= WS_EX_TRANSPARENT | WS_EX_LAYERED;
+                else ex &= ~WS_EX_TRANSPARENT;
+                SetWindowLong(this.Handle, GWL_EXSTYLE, ex);
+            }
+            catch { }
+        }
+
+        protected override void WndProc(ref Message m)
+        {
+            const int WM_NCHITTEST = 0x0084;
+            const int HTTRANSPARENT = -1;
+
+            if (m.Msg == WM_NCHITTEST)
+            {
+                if (ShouldClickThrough())
+                {
+                    m.Result = (IntPtr)HTTRANSPARENT; // Maus an Fenster darunter
+                    return;
+                }
+            }
+            base.WndProc(ref m);
         }
     }
 }
