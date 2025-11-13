@@ -3,7 +3,6 @@ using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Threading.Tasks;
 using System.Windows.Forms;
-using System.Runtime.InteropServices;
 
 namespace DropZoneApp
 {
@@ -12,51 +11,36 @@ namespace DropZoneApp
         private readonly AppConfig _config;
         private readonly MainForm _host;
         private System.Windows.Forms.Timer? _blinkTimer;
-
         private bool _dragActive;
-        private System.Windows.Forms.Timer? _hoverTimer; // proaktives Umschalten
 
-        [DllImport("user32.dll", SetLastError = true)]
-        private static extern int GetWindowLong(IntPtr hWnd, int nIndex);
-        [DllImport("user32.dll", SetLastError = true)]
-        private static extern int SetWindowLong(IntPtr hWnd, int nIndex, int dwNewLong);
-        [DllImport("user32.dll", SetLastError = true)]
-        private static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int X, int Y, int cx, int cy, uint uFlags);
+        // Polling (keine Stile nötig)
+        private System.Windows.Forms.Timer? _clickThroughTimer;
 
-        private const int GWL_EXSTYLE = -20;
-        private const int WS_EX_TRANSPARENT = 0x00000020;
-        private const uint SWP_NOSIZE = 0x0001;
-        private const uint SWP_NOMOVE = 0x0002;
-        private const uint SWP_NOZORDER = 0x0004;
-        private const uint SWP_FRAMECHANGED = 0x0020;
-
-        private void SetClickThrough(bool enable)
-        {
-            if (!IsHandleCreated) return;
-            try
-            {
-                int ex = GetWindowLong(this.Handle, GWL_EXSTYLE);
-                int newEx = enable ? (ex | WS_EX_TRANSPARENT) : (ex & ~WS_EX_TRANSPARENT);
-                if (newEx != ex)
-                {
-                    SetWindowLong(this.Handle, GWL_EXSTYLE, newEx);
-                    SetWindowPos(this.Handle, IntPtr.Zero, 0, 0, 0, 0,
-                        SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
-                }
-            }
-            catch { }
-        }
-
-        private bool ShouldClickThrough()
+        private bool ShouldPassThrough()
         {
             if (_dragActive) return false;
+            if ((ModifierKeys & Keys.Control) == Keys.Control) return false;
             bool inside = Bounds.Contains(Cursor.Position);
             bool mouseDown = Control.MouseButtons != MouseButtons.None;
-            if (inside && mouseDown) return false; // wichtig für DragEnter
+            if (inside && mouseDown) return false;
             return true;
         }
 
-        private void UpdateClickThrough() => SetClickThrough(ShouldClickThrough());
+        // Nur via WM_NCHITTEST durchreichen, keine Extended Styles
+        protected override void WndProc(ref Message m)
+        {
+            const int WM_NCHITTEST = 0x0084;
+            const int HTTRANSPARENT = -1;
+            if (m.Msg == WM_NCHITTEST)
+            {
+                if (ShouldPassThrough())
+                {
+                    m.Result = (IntPtr)HTTRANSPARENT;
+                    return;
+                }
+            }
+            base.WndProc(ref m);
+        }
 
         public HotCornerForm(AppConfig config, MainForm host)
         {
@@ -106,22 +90,18 @@ namespace DropZoneApp
             DragEnter += (s, e) =>
             {
                 _dragActive = true;
-                UpdateClickThrough();
                 e.Effect = HasSupportedFormats(e.Data) ? DragDropEffects.Copy : DragDropEffects.None;
             };
-            DragLeave += (s, e) => { _dragActive = false; UpdateClickThrough(); };
+            DragLeave += (s, e) => { _dragActive = false; };
             DragDrop += async (s, e) =>
             {
-                _dragActive = false; UpdateClickThrough();
+                _dragActive = false;
                 await HandleDropAsync(e.Data!);
             };
 
-            _hoverTimer = new System.Windows.Forms.Timer { Interval = 40 };
-            _hoverTimer.Tick += (_, __) => UpdateClickThrough();
-            _hoverTimer.Start();
-
-            Shown += (s, e) => UpdateClickThrough();
-            HandleCreated += (s, e) => UpdateClickThrough();
+            _clickThroughTimer = new System.Windows.Forms.Timer { Interval = 60 };
+            _clickThroughTimer.Tick += (_, __) => { /* nur HitTest, keine Stile */ };
+            _clickThroughTimer.Start();
         }
 
         private static bool HasSupportedFormats(IDataObject? data)
@@ -137,23 +117,21 @@ namespace DropZoneApp
         {
             try
             {
-                await _host.ProcessDropAsync(data, null, null, true);
+                await _host.ProcessDropAsync(data, null, null, false); // keine Notifications mehr
                 if (_config.HotCornerBlink) Blink();
-                if (_config.Notifications) Toast.Show("DropZone", "Ablage abgeschlossen", 3000);
             }
             catch { }
         }
 
         public void ApplyConfig()
         {
-            Width  = Math.Max(4, _config.HotCornerSize);
+            Width = Math.Max(4, _config.HotCornerSize);
             Height = Math.Max(4, _config.HotCornerSize);
             Opacity = Math.Max(0.01, Math.Min(1.0, _config.HotCornerOpacity));
             ApplyPosition();
             TopMost = true;
             BringToFront();
             Invalidate();
-            UpdateClickThrough();
         }
 
         private void ApplyPosition()
