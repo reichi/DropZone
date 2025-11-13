@@ -3,6 +3,7 @@ using System.Drawing;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 using System.Drawing.Drawing2D;
+using System.Runtime.InteropServices;
 
 namespace DropZoneApp
 {
@@ -14,26 +15,75 @@ namespace DropZoneApp
         private readonly ProgressBar _progress;
 
         private bool _dragActive;
-        private bool _moving;
-        private Point _moveOffset;
 
         private System.Windows.Forms.Timer? _pulseTimer;
         private int _pulseElapsed;
 
-        // Polling, damit Drag von außen zuverlässig erkannt wird (ohne WS_EX_TRANSPARENT)
-        private System.Windows.Forms.Timer? _clickThroughTimer;
+        // Proaktives Umschalten Click‑Through (damit DragEnter zuverlässig ankommt)
+        private System.Windows.Forms.Timer? _hoverTimer;
 
-        private bool ShouldPassThrough()
+        // --- P/Invoke / Styles ---
+        private const int GWL_EXSTYLE = -20;
+        private const int WS_EX_TRANSPARENT = 0x00000020;
+        private const int WM_NCHITTEST = 0x0084;
+        private const int WM_NCLBUTTONDOWN = 0x00A1;
+        private const int HTCAPTION = 2;
+        private const int HTTRANSPARENT = -1;
+
+        [DllImport("user32.dll", SetLastError = true)]
+        private static extern int GetWindowLong(IntPtr hWnd, int nIndex);
+        [DllImport("user32.dll", SetLastError = true)]
+        private static extern int SetWindowLong(IntPtr hWnd, int nIndex, int dwNewLong);
+        [DllImport("user32.dll", SetLastError = true)]
+        private static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int X, int Y, int cx, int cy, uint uFlags);
+        [DllImport("user32.dll")]
+        private static extern bool ReleaseCapture();
+        [DllImport("user32.dll")]
+        private static extern IntPtr SendMessage(IntPtr hWnd, int Msg, IntPtr wParam, IntPtr lParam);
+
+        private const uint SWP_NOSIZE = 0x0001;
+        private const uint SWP_NOMOVE = 0x0002;
+        private const uint SWP_NOZORDER = 0x0004;
+        private const uint SWP_FRAMECHANGED = 0x0020;
+
+        private void SetClickThrough(bool enable)
         {
-            // Click-Through aktiv, wenn:
-            // - Option aktiv
-            // - kein Drag aktiv
-            // - STRG NICHT gedrückt (STRG = verschieben)
-            // - keine Maustaste gedrückt (typischer Fall: externer Drag hält LMB)
-            if (!_config.DockClickThrough) return false;
-            if (_dragActive) return false;
-            if ((ModifierKeys & Keys.Control) == Keys.Control) return false;
+            if (!IsHandleCreated) return;
 
+            void applyToHandle(IntPtr handle)
+            {
+                try
+                {
+                    int ex = GetWindowLong(handle, GWL_EXSTYLE);
+                    int newEx = enable ? (ex | WS_EX_TRANSPARENT) : (ex & ~WS_EX_TRANSPARENT);
+                    if (newEx != ex)
+                    {
+                        SetWindowLong(handle, GWL_EXSTYLE, newEx);
+                        SetWindowPos(handle, IntPtr.Zero, 0, 0, 0, 0,
+                            SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
+                    }
+                }
+                catch { }
+            }
+
+            // WICHTIG: auch auf Child‑Controls anwenden (Label, ProgressBar), sonst „schlucken“ die den Klick
+            applyToHandle(this.Handle);
+            foreach (Control c in Controls)
+            {
+                if (c.IsHandleCreated) applyToHandle(c.Handle);
+            }
+
+            _status.Enabled = !enable;
+            _progress.Enabled = !enable;
+        }
+
+        private bool ShouldClickThrough()
+        {
+            if (!_config.DockClickThrough) return false;
+            if (_dragActive) return false;                       // während Drag: eingehende Drops erlauben
+            if ((ModifierKeys & Keys.Control) == Keys.Control) return false; // STRG = verschieben
+
+            // Wenn Cursor im Fenster UND Taste gedrückt → nicht durchreichen (Drag aus Fremd-App)
             bool inside = Bounds.Contains(Cursor.Position);
             bool mouseDown = Control.MouseButtons != MouseButtons.None;
             if (inside && mouseDown) return false;
@@ -41,23 +91,20 @@ namespace DropZoneApp
             return true;
         }
 
-        // STRG = verschieben (HTCAPTION); sonst ggf. durchreichen (HTTRANSPARENT)
+        private void UpdateClickThroughState() => SetClickThrough(ShouldClickThrough());
+
         protected override void WndProc(ref Message m)
         {
-            const int WM_NCHITTEST = 0x0084;
-            const int HTCAPTION = 2;
-            const int HTTRANSPARENT = -1;
-
             if (m.Msg == WM_NCHITTEST)
             {
                 if ((ModifierKeys & Keys.Control) == Keys.Control)
                 {
-                    m.Result = (IntPtr)HTCAPTION; // STRG: Fenster verschieben erlaubt
+                    m.Result = (IntPtr)HTCAPTION; // STRG: klassisches Fensterziehen
                     return;
                 }
-                if (ShouldPassThrough())
+                if (ShouldClickThrough())
                 {
-                    m.Result = (IntPtr)HTTRANSPARENT; // Klick/Hit an Fenster darunter
+                    m.Result = (IntPtr)HTTRANSPARENT; // Klicks/Hit an darunterliegendes Fenster
                     return;
                 }
             }
@@ -91,7 +138,6 @@ namespace DropZoneApp
 
             _status = new Label { Dock = DockStyle.Bottom, Height = 18, Text = "Dock bereit", TextAlign = ContentAlignment.MiddleCenter };
             _progress = new ProgressBar { Dock = DockStyle.Bottom, Height = 12, Style = ProgressBarStyle.Continuous, Visible = true };
-
             Controls.Add(_status);
             Controls.Add(_progress);
 
@@ -100,43 +146,39 @@ namespace DropZoneApp
             DragEnter += (s, e) =>
             {
                 _dragActive = true;
+                UpdateClickThroughState();
                 e.Effect = HasSupportedFormats(e.Data) ? DragDropEffects.Copy : DragDropEffects.None;
             };
-            DragLeave += (s, e) => { _dragActive = false; };
+            DragLeave += (s, e) => { _dragActive = false; UpdateClickThroughState(); };
             DragDrop += async (s, e) =>
             {
-                _dragActive = false;
+                _dragActive = false; UpdateClickThroughState();
                 await HandleDropAsync(e.Data!);
             };
 
-            Move += (_, __) => SavePosition();
-            Resize += (_, __) => SaveSize();
-
-            DoubleClick += (_, __) => { _host.Show(); _host.Activate(); };
-
-            // Optionales manuelles Verschieben (zusätzlich zu HTCAPTION, stört aber nicht)
+            // STRG + LMB => sofort echtes Fensterziehen starten (unabhängig von Styles/Timer)
             MouseDown += (s, e) =>
             {
-                if ((ModifierKeys & Keys.Control) == Keys.Control && e.Button == MouseButtons.Left)
+                if (e.Button == MouseButtons.Left && (ModifierKeys & Keys.Control) == Keys.Control)
                 {
-                    _moving = true;
-                    _moveOffset = new Point(e.X, e.Y);
+                    SetClickThrough(false);
+                    ReleaseCapture();
+                    SendMessage(this.Handle, WM_NCLBUTTONDOWN, (IntPtr)HTCAPTION, IntPtr.Zero);
+                }
+                else
+                {
+                    UpdateClickThroughState();
                 }
             };
-            MouseUp += (s, e) => { _moving = false; };
-            MouseMove += (s, e) =>
-            {
-                if (_moving)
-                {
-                    var screenPos = PointToScreen(new Point(e.X, e.Y));
-                    Location = new Point(screenPos.X - _moveOffset.X, screenPos.Y - _moveOffset.Y);
-                }
-            };
+            MouseUp += (_, __) => UpdateClickThroughState();
 
-            // Poll, damit bei gedrückter Taste (externer Drag) sofort Nicht‑Durchreichen aktiv wird
-            _clickThroughTimer = new System.Windows.Forms.Timer { Interval = 60 };
-            _clickThroughTimer.Tick += (_, __) => { /* nur HitTest steuern, kein WS_EX_TRANSPARENT nötig */ };
-            _clickThroughTimer.Start();
+            // Proaktives Umschalten (damit während gedrückter Maustaste DragEnter ankommt)
+            _hoverTimer = new System.Windows.Forms.Timer { Interval = 40 };
+            _hoverTimer.Tick += (_, __) => UpdateClickThroughState();
+            _hoverTimer.Start();
+
+            HandleCreated += (_, __) => UpdateClickThroughState();
+            Shown += (_, __) => UpdateClickThroughState();
         }
 
         private static bool HasSupportedFormats(IDataObject? data)
@@ -170,6 +212,7 @@ namespace DropZoneApp
                 Size = new Size(Math.Max(60, _config.DockWidth), Math.Max(80, _config.DockHeight));
             if (_config.DockLeft.HasValue && _config.DockTop.HasValue)
                 Location = new Point(_config.DockLeft.Value, _config.DockTop.Value);
+            UpdateClickThroughState();
             Invalidate();
         }
 
@@ -184,7 +227,9 @@ namespace DropZoneApp
                     data,
                     progressOverride: _progress,
                     statusOverride: _status,
-                    triggerNotifications: false); // Benachrichtigungen vollständig entfernt
+                    triggerNotifications: false); // Notifications sind komplett entfernt
+
+                if (_config.PulseAnimation) StartPulse();
             }
             catch (Exception ex)
             {
@@ -196,7 +241,23 @@ namespace DropZoneApp
             {
                 _progress.Style = ProgressBarStyle.Continuous;
                 _progress.Value = 0;
+                UpdateClickThroughState();
             }
+        }
+
+        private void StartPulse()
+        {
+            _pulseTimer?.Stop();
+            _pulseTimer?.Dispose();
+            _pulseElapsed = 0;
+            _pulseTimer = new System.Windows.Forms.Timer { Interval = 15 };
+            _pulseTimer.Tick += (s, e) =>
+            {
+                _pulseElapsed += _pulseTimer!.Interval;
+                if (_pulseElapsed >= _config.PulseDurationMs) { _pulseTimer.Stop(); _pulseTimer.Dispose(); _pulseTimer = null; }
+                Invalidate();
+            };
+            _pulseTimer.Start();
         }
 
         private void DockForm_Paint(object? sender, PaintEventArgs e)
@@ -221,7 +282,7 @@ namespace DropZoneApp
                     iconSize = Math.Max(16, iconSize);
                     var dest = new Rectangle(r.Left + (r.Width - iconSize) / 2, r.Top + (r.Height - iconSize) / 2, iconSize, iconSize);
                     var oldInterp = g.InterpolationMode;
-                    g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
+                    g.InterpolationMode = InterpolationMode.HighQualityBicubic;
                     g.DrawImage(bmp, dest);
                     g.InterpolationMode = oldInterp;
                 }
