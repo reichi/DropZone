@@ -21,6 +21,9 @@ namespace DropZoneApp
         private System.Windows.Forms.Timer? _pulseTimer;
         private int _pulseElapsed;
 
+        // NEU: Polling-Timer, damit Drag von außen zuverlässig erkannt wird
+        private System.Windows.Forms.Timer? _clickThroughTimer;
+
         // --- P/Invoke für Extended Window Styles (Click-Through) ---
         private const int GWL_EXSTYLE = -20;
         private const int WS_EX_TRANSPARENT = 0x00000020;
@@ -85,6 +88,11 @@ namespace DropZoneApp
 
         private bool ShouldClickThrough()
         {
+            // Click-Through aktiv nur, wenn
+            // - Option aktiv
+            // - kein Drag aktiv
+            // - keine STRG-Taste (Verschieben)
+            // - keine Maustaste gedrückt (typ. Drag aus anderem Fenster)
             if (!_config.DockClickThrough) return false;
             if (_dragActive) return false;
             if ((ModifierKeys & Keys.Control) == Keys.Control) return false;
@@ -94,7 +102,7 @@ namespace DropZoneApp
 
         private void UpdateClickThroughState() => SetClickThrough(ShouldClickThrough());
 
-        // Für STRG-Verschieben und HTTRANSPARENT-Fallback
+        // STRG = Fenster greifen (verschieben); sonst HTTRANSPARENT-Fallback
         protected override void WndProc(ref Message m)
         {
             const int WM_NCHITTEST = 0x0084;
@@ -126,12 +134,11 @@ namespace DropZoneApp
             ShowInTaskbar = false;
             FormBorderStyle = FormBorderStyle.None;
             TopMost = true;
-
-            // **Fix**: Math.Max (nicht Math.max)
             Opacity = Math.Clamp(_config.DockOpacity, 0.1, 1.0);
             BackColor = Color.White;
             StartPosition = FormStartPosition.Manual;
-            Size = new Size(Math.Max(60, _config.DockWidth), Math.Max(80, _config.DockHeight)); // **Fix**
+
+            Size = new Size(Math.Max(60, _config.DockWidth), Math.Max(80, _config.DockHeight));
 
             if (_config.DockLeft.HasValue && _config.DockTop.HasValue)
                 Location = new Point(_config.DockLeft.Value, _config.DockTop.Value);
@@ -164,6 +171,11 @@ namespace DropZoneApp
                 _dragActive = false; UpdateClickThroughState();
                 await HandleDropAsync(e.Data!);
             };
+
+            // NEU: Poll-Timer aktiviert/deaktiviert Click-Through, damit DragEnter überhaupt ankommt
+            _clickThroughTimer = new System.Windows.Forms.Timer { Interval = 60 };
+            _clickThroughTimer.Tick += (_, __) => UpdateClickThroughState();
+            _clickThroughTimer.Start();
 
             Move += (_, __) => SavePosition();
             Resize += (_, __) => SaveSize();
@@ -225,7 +237,7 @@ namespace DropZoneApp
             TopMost = true;
             Opacity = Math.Clamp(_config.DockOpacity, 0.1, 1.0);
             if (_config.DockWidth > 0 && _config.DockHeight > 0)
-                Size = new Size(Math.Max(60, _config.DockWidth), Math.Max(80, _config.DockHeight)); // **Fix**
+                Size = new Size(Math.Max(60, _config.DockWidth), Math.Max(80, _config.DockHeight));
             if (_config.DockLeft.HasValue && _config.DockTop.HasValue)
                 Location = new Point(_config.DockLeft.Value, _config.DockTop.Value);
             UpdateClickThroughState();
@@ -246,7 +258,6 @@ namespace DropZoneApp
                     triggerNotifications: true);
 
                 if (_config.PulseAnimation) StartPulse();
-
                 if (_config.Notifications) Toast.Show("DropZone", "Ablage abgeschlossen", 3000);
             }
             catch (Exception ex)
