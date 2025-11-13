@@ -14,6 +14,8 @@ namespace DropZoneApp
         public bool Notifications    { get; set; } = true;
         public bool AutoStart        { get; set; } = false;
         public bool CloseToTray      { get; set; } = true;
+        public bool MinimizeToTray { get; set; } = true;   // NEU: wird mit Save()/Load() persistiert
+
 
         public int? WindowLeft       { get; set; }
         public int? WindowTop        { get; set; }
