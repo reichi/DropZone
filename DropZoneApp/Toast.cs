@@ -7,8 +7,7 @@ namespace DropZoneApp
     public static class Toast
     {
         /// <summary>
-        /// Zeigt einen einfachen Tray-Balloon an. Wird automatisch nach 'durationMs' wieder geschlossen.
-        /// Läuft ohne bestehendes NotifyIcon, da ein eigenes temporäres Icon erzeugt und wieder entsorgt wird.
+        /// Zeigt einen einfachen Tray-Ballon. Wird automatisch nach 'durationMs' geschlossen.
         /// </summary>
         public static void Show(string title, string text, int durationMs = 3000)
         {
@@ -16,7 +15,6 @@ namespace DropZoneApp
             {
                 var ico = Icon.ExtractAssociatedIcon(Application.ExecutablePath) ?? SystemIcons.Information;
 
-                // eigenes NotifyIcon anlegen
                 var ni = new NotifyIcon
                 {
                     Icon = ico,
@@ -24,10 +22,9 @@ namespace DropZoneApp
                     BalloonTipTitle = string.IsNullOrWhiteSpace(title) ? "DropZone" : title,
                     BalloonTipText  = text ?? string.Empty
                 };
-
                 ni.ShowBalloonTip(Math.Max(1000, durationMs));
 
-                // **Fix**: explizit System.Windows.Forms.Timer verwenden (keine Ambiguität mit System.Threading.Timer)
+                // WICHTIG: explizit WinForms-Timer verwenden (keine Kollision mit System.Threading.Timer)
                 var timer = new System.Windows.Forms.Timer { Interval = Math.Max(1500, durationMs + 800) };
                 timer.Tick += (s, e) =>
                 {
@@ -38,7 +35,7 @@ namespace DropZoneApp
             }
             catch
             {
-                // absichtlich schlucken – fehlende Shell-Rechte / Quiet Hours etc. sollen keinen Crash verursachen
+                // Quiet Hours / Policies / fehlende Shell dürfen keinen Crash auslösen
             }
         }
     }
