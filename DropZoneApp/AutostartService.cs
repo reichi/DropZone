@@ -7,83 +7,53 @@ namespace DropZoneApp
 {
     public static class AutostartService
     {
-        private const string RunKey = @"Software\Microsoft\Windows\CurrentVersion\Run";
-        private const string ValueName = "DropZoneApp";
+        private const string RUN_KEY = @"Software\Microsoft\Windows\CurrentVersion\Run";
+        private const string VALUE_NAME = "DropZoneApp";
 
-        private static string StartupShortcutPath =>
-            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Startup), "DropZoneApp.lnk");
-
-        private const string ExtraArgs = "--minimized";
-
+        /// <summary>
+        /// Aktiviert/Deaktiviert den Autostart (HKCU\...\Run). Pfad zur aktuellen EXE wird hinterlegt.
+        /// </summary>
         public static void Apply(bool enable)
         {
-            bool regOk = TryRegistry(enable);
-            bool shOk  = TryStartupShortcut(enable);
-            try { Log.Info($"Autostart {(enable ? "aktiviert" : "deaktiviert")}: Registry={(regOk?"ok":"fail")}, StartupShortcut={(shOk?"ok":"fail")}"); } catch { }
+            try
+            {
+                using var key = Registry.CurrentUser.OpenSubKey(RUN_KEY, true) ?? Registry.CurrentUser.CreateSubKey(RUN_KEY, true);
+                if (key == null) return;
+
+                if (enable)
+                {
+                    string exePath = Application.ExecutablePath;
+                    // In Anführungszeichen, falls Leerzeichen im Pfad
+                    string value = $"\"{exePath}\"";
+                    key.SetValue(VALUE_NAME, value, RegistryValueKind.String);
+                }
+                else
+                {
+                    if (key.GetValue(VALUE_NAME) != null)
+                        key.DeleteValue(VALUE_NAME, false);
+                }
+            }
+            catch
+            {
+                // Keine Exception nach außen – UI bleibt responsiv
+            }
         }
 
+        /// <summary>
+        /// Prüft, ob aktuell ein Autostart-Eintrag existiert.
+        /// </summary>
         public static bool IsEnabled()
         {
             try
             {
-                using (var key = Registry.CurrentUser.OpenSubKey(RunKey, writable: false))
-                {
-                    if (key?.GetValue(ValueName) is string s && s.IndexOf(Application.ExecutablePath, StringComparison.OrdinalIgnoreCase) >= 0)
-                        return true;
-                }
+                using var key = Registry.CurrentUser.OpenSubKey(RUN_KEY, false);
+                if (key == null) return false;
+                return key.GetValue(VALUE_NAME) != null;
             }
-            catch { }
-            try { if (File.Exists(StartupShortcutPath)) return true; } catch { }
-            return false;
-        }
-
-        private static bool TryRegistry(bool enable)
-        {
-            try
+            catch
             {
-                using (var key = Registry.CurrentUser.OpenSubKey(RunKey, writable: true)
-                                ?? Registry.CurrentUser.CreateSubKey(RunKey, true))
-                {
-                    if (key == null) return false;
-                    if (enable)
-                    {
-                        var exe = Application.ExecutablePath;
-                        key.SetValue(ValueName, "\"" + exe + "\" " + ExtraArgs);
-                    }
-                    else key.DeleteValue(ValueName, false);
-                    return true;
-                }
+                return false;
             }
-            catch (Exception ex) { try { Log.Error("Autostart registry failed", ex); } catch { } return false; }
-        }
-
-        private static bool TryStartupShortcut(bool enable)
-        {
-            try
-            {
-                var lnk = StartupShortcutPath;
-                if (!enable)
-                {
-                    if (File.Exists(lnk)) File.Delete(lnk);
-                    return true;
-                }
-
-                var exe = Application.ExecutablePath;
-                var dir = Path.GetDirectoryName(exe) ?? string.Empty;
-                var type = Type.GetTypeFromProgID("WScript.Shell");
-                if (type == null) return false;
-                var shell = Activator.CreateInstance(type);
-                if (shell == null) return false;
-                var sc = type.InvokeMember("CreateShortcut", System.Reflection.BindingFlags.InvokeMethod, null, shell, new object[] { lnk });
-                var scType = sc!.GetType();
-                scType.InvokeMember("TargetPath", System.Reflection.BindingFlags.SetProperty, null, sc, new object[] { exe });
-                scType.InvokeMember("WorkingDirectory", System.Reflection.BindingFlags.SetProperty, null, sc, new object[] { dir });
-                scType.InvokeMember("IconLocation", System.Reflection.BindingFlags.SetProperty, null, sc, new object[] { exe + ",0" });
-                scType.InvokeMember("Arguments", System.Reflection.BindingFlags.SetProperty, null, sc, new object[] { ExtraArgs });
-                scType.InvokeMember("Save", System.Reflection.BindingFlags.InvokeMethod, null, sc, Array.Empty<object>());
-                return File.Exists(lnk);
-            }
-            catch (Exception ex) { try { Log.Error("Autostart shortcut failed", ex); } catch { } return false; }
         }
     }
 }
