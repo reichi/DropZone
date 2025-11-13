@@ -12,9 +12,10 @@ namespace DropZoneApp
         public int  DaysToKeep       { get; set; } = 7;
         public bool AlwaysOnTop      { get; set; } = true;
         public bool Notifications    { get; set; } = true;
-        public bool AutoStart        { get; set; } = false;
-        public bool CloseToTray      { get; set; } = true;
-        public bool MinimizeToTray { get; set; } = true;   // NEU: wird mit Save()/Load() persistiert
+        public bool CloseToTray    { get; set; } = true;  // Standard: an
+        public bool MinimizeToTray { get; set; } = true;  // Standard: an
+        public bool AutoStart      { get; set; } = true;  // Standard: an
+
 
 
         public int? WindowLeft       { get; set; }
