@@ -9,6 +9,8 @@ namespace DropZoneApp
 {
     public static class FileCopyService
     {
+        private const int MaxBaseLen = 150; // Basisname max. 150 Zeichen (Extension kommt hinzu)
+
         public sealed class CopyItem
         {
             public string SourcePath { get; init; } = "";
@@ -35,7 +37,7 @@ namespace DropZoneApp
             }
 
             long total = 0;
-            try { total = files.Where(File.Exists).Sum(f => new FileInfo(f).Length); } catch {}
+            try { total = files.Where(File.Exists).Sum(f => new FileInfo(f).Length); } catch { }
             long done = 0;
             var created = new List<string>();
 
@@ -43,8 +45,8 @@ namespace DropZoneApp
             {
                 if (!File.Exists(src)) continue;
 
-                var sanitized = SanitizeName(src);
-                var dest = UniqueDestination(targetFolder, sanitized); // Zeitstempel nur bei Kollision
+                var sanitized = SanitizeName(src); // bereits 150er‑Limit (Basis)
+                var dest = UniqueDestination(targetFolder, sanitized); // bei Kollision ggf. Suffix & erneutes Kürzen
 
                 Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
                 await CopyStreamAsync(File.OpenRead(src), File.Create(dest), l => { done += l; progress?.Report(done); });
@@ -65,8 +67,8 @@ namespace DropZoneApp
 
             foreach (var (name, stream, length) in streams)
             {
-                var sanitized = SanitizeName(name);
-                var dest = UniqueDestination(targetFolder, sanitized); // Zeitstempel nur bei Kollision
+                var sanitized = SanitizeName(name); // bereits 150er‑Limit (Basis)
+                var dest = UniqueDestination(targetFolder, sanitized); // bei Kollision ggf. Suffix & erneutes Kürzen
 
                 await CopyStreamAsync(stream, File.Create(dest), l => { done += l; progress?.Report(done); });
                 created.Add(dest);
@@ -83,8 +85,8 @@ namespace DropZoneApp
         }
 
         /// <summary>
-        /// Erlaubt nur A–Z, a–z, 0–9, '_' und '.' im gesamten Dateinamen.
-        /// Extension wird separat bereinigt (nur A–Z, a–z, 0–9).
+        /// Nur A–Z, a–z, 0–9, '_' und '.'.
+        /// Extension wird separat bereinigt (A–Z, a–z, 0–9). Basisname wird auf 150 Zeichen begrenzt.
         /// </summary>
         public static string SanitizeName(string originalPathOrName)
         {
@@ -95,40 +97,58 @@ namespace DropZoneApp
             string cleanBase = FilterLettersDigitsUnderscoreDot(baseName);
             if (string.IsNullOrEmpty(cleanBase)) cleanBase = "file";
 
-            string cleanExt  = FilterLettersDigits(Path.GetExtension(originalName).TrimStart('.'));
-            string finalExt  = string.IsNullOrEmpty(cleanExt) ? "" : "." + cleanExt;
+            string cleanExtName  = FilterLettersDigits(ext.TrimStart('.'));
+            string finalExt      = string.IsNullOrEmpty(cleanExtName) ? "" : "." + cleanExtName;
 
-            // Keine führenden/trailing Punkte/Unterstriche
+            // Keine führenden/abschließenden Punkte/Unterstriche
             cleanBase = cleanBase.Trim('_').Trim('.');
             if (string.IsNullOrEmpty(cleanBase)) cleanBase = "file";
+
+            // **Längenlimit:** Basisname max. 150 (Extension kommt hinzu)
+            if (cleanBase.Length > MaxBaseLen)
+                cleanBase = cleanBase.Substring(0, MaxBaseLen);
 
             return cleanBase + finalExt;
         }
 
         /// <summary>
-        /// Gibt einen eindeutigen Zieldateinamen zurück.
-        /// Erst ohne Zeitstempel; bei Kollisionen "_yyyyMMdd_HHmmssfff";
-        /// falls immer noch Kollision, zusätzlich "_2", "_3", ...
+        /// Liefert eindeutigen Zielpfad. Bei Kollision:
+        /// 1) Suffix "_yyyyMMdd_HHmmssfff" anhängen (Basis ggf. kürzen, so dass Basis+Suffix ≤ 150).
+        /// 2) Falls weiterhin Kollision: "_2", "_3", … anhängen (Basis erneut passend kürzen).
         /// </summary>
         private static string UniqueDestination(string targetFolder, string sanitizedFileName)
         {
-            string full = Path.Combine(targetFolder, sanitizedFileName);
-            if (!File.Exists(full)) return full;
-
             string name = Path.GetFileNameWithoutExtension(sanitizedFileName);
             string ext  = Path.GetExtension(sanitizedFileName);
-            string ts   = DateTime.UtcNow.ToString("yyyyMMdd_HHmmssfff");
+            string dest = Path.Combine(targetFolder, name + ext);
 
-            string withTs = Path.Combine(targetFolder, $"{name}_{ts}{ext}");
+            if (!File.Exists(dest)) return dest;
+
+            string ts = "_" + DateTime.UtcNow.ToString("yyyyMMdd_HHmmssfff");
+            string baseTrimmed = TrimBaseToLimit(name, ts.Length);
+            string withTs = Path.Combine(targetFolder, baseTrimmed + ts + ext);
             if (!File.Exists(withTs)) return withTs;
 
             int i = 2;
             while (true)
             {
-                string candidate = Path.Combine(targetFolder, $"{name}_{ts}_{i}{ext}");
+                string suffix = "_" + i.ToString();
+                string base2 = TrimBaseToLimit(name, ts.Length + suffix.Length);
+                string candidate = Path.Combine(targetFolder, base2 + ts + suffix + ext);
                 if (!File.Exists(candidate)) return candidate;
                 i++;
             }
+        }
+
+        /// <summary>
+        /// Kürzt den Basisnamen so, dass Basis + (Suffixlänge) ≤ 150 bleibt.
+        /// </summary>
+        private static string TrimBaseToLimit(string baseName, int suffixLen)
+        {
+            int allowed = Math.Max(1, MaxBaseLen - suffixLen);
+            if (baseName.Length > allowed)
+                return baseName.Substring(0, allowed);
+            return baseName;
         }
 
         private static async Task CopyStreamAsync(Stream src, Stream dst, Action<long>? onProgress)
@@ -166,7 +186,6 @@ namespace DropZoneApp
                 }
                 // andere Zeichen werden verworfen
             }
-            // Mehrere Unterstriche zu einem
             string r = sb.ToString();
             while (r.Contains("__")) r = r.Replace("__", "_");
             return r;
