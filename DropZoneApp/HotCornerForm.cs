@@ -14,6 +14,8 @@ namespace DropZoneApp
         private System.Windows.Forms.Timer? _blinkTimer;
         private bool _dragActive;
 
+        private System.Windows.Forms.Timer? _clickThroughTimer;
+
         [DllImport("user32.dll", SetLastError = true)]
         private static extern int GetWindowLong(IntPtr hWnd, int nIndex);
         [DllImport("user32.dll", SetLastError = true)]
@@ -45,7 +47,15 @@ namespace DropZoneApp
             catch { }
         }
 
-        private void UpdateClickThrough() => SetClickThrough(!_dragActive);
+        private bool ShouldClickThrough()
+        {
+            if (_dragActive) return false;
+            if (Control.MouseButtons != MouseButtons.None) return false;
+            if ((ModifierKeys & Keys.Control) == Keys.Control) return false;
+            return true;
+        }
+
+        private void UpdateClickThrough() => SetClickThrough(ShouldClickThrough());
 
         public HotCornerForm(AppConfig config, MainForm host)
         {
@@ -84,7 +94,7 @@ namespace DropZoneApp
                         size = Math.Max(8, size);
                         var dest = new Rectangle((ClientSize.Width - size) / 2, (ClientSize.Height - size) / 2, size, size);
                         var old = g.InterpolationMode;
-                        g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
+                        g.InterpolationMode = InterpolationMode.HighQualityBicubic;
                         g.DrawImage(bmp, dest);
                         g.InterpolationMode = old;
                     }
@@ -105,7 +115,11 @@ namespace DropZoneApp
                 await HandleDropAsync(e.Data!);
             };
 
-            // Klicks nicht behandeln -> gehen durch
+            // NEU: Poll-Timer wie beim Dock – sorgt dafür, dass DragEnter überhaupt ankommt
+            _clickThroughTimer = new System.Windows.Forms.Timer { Interval = 60 };
+            _clickThroughTimer.Tick += (_, __) => UpdateClickThrough();
+            _clickThroughTimer.Start();
+
             Shown += (s, e) => UpdateClickThrough();
             HandleCreated += (s, e) => UpdateClickThrough();
         }
