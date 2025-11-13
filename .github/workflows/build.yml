@@ -8,9 +8,6 @@ on:
 jobs:
   build:
     runs-on: windows-latest
-    defaults:
-      run:
-        working-directory: DropZoneApp   # <— WICHTIG: Ordner, in dem die .csproj liegt
 
     steps:
       - uses: actions/checkout@v4
@@ -23,16 +20,22 @@ jobs:
       - name: dotnet --info
         run: dotnet --info
 
-      - name: Restore
-        run: dotnet restore DropZoneApp.csproj
+      - name: Publish win-x64 (self-contained, single file) -> artifacts
+        shell: pwsh
+        run: |
+          $Out = "$env:GITHUB_WORKSPACE\artifacts\win-x64"
+          New-Item -ItemType Directory -Force -Path $Out | Out-Null
+          dotnet publish DropZoneApp\DropZoneApp.csproj `
+            -c Release -r win-x64 `
+            -p:PublishSingleFile=true --self-contained true `
+            -o $Out
+          if (!(Test-Path $Out)) { throw "Publish-Ausgabe nicht gefunden: $Out" }
+          Get-ChildItem $Out
 
-      - name: Publish win-x64 (self-contained, SingleFile)
-        run: dotnet publish DropZoneApp.csproj -c Release -r win-x64 -p:PublishSingleFile=true --self-contained true
-
-      - name: Artefakt hochladen (EXE + Dateien)
+      - name: Upload artifact (EXE + Dateien)
         uses: actions/upload-artifact@v4
         with:
           name: DropZoneApp_win-x64_publish
-          path: bin/Release/net8.0-windows/win-x64/publish
+          path: artifacts/win-x64
           if-no-files-found: error
           retention-days: 14
