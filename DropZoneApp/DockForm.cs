@@ -21,25 +21,16 @@ namespace DropZoneApp
         private System.Windows.Forms.Timer? _pulseTimer;
         private int _pulseElapsed;
 
-        // NEU: Polling-Timer, damit Drag von außen zuverlässig erkannt wird
-        private System.Windows.Forms.Timer? _clickThroughTimer;
+        private System.Windows.Forms.Timer? _hoverTimer; // proaktives Umschalten Click‑Through
 
-        // --- P/Invoke für Extended Window Styles (Click-Through) ---
+        // --- P/Invoke ---
         private const int GWL_EXSTYLE = -20;
         private const int WS_EX_TRANSPARENT = 0x00000020;
 
         [DllImport("user32.dll", SetLastError = true)]
         private static extern int GetWindowLong(IntPtr hWnd, int nIndex);
-
-        [DllImport("user32.dll", EntryPoint = "GetWindowLongPtr", SetLastError = true)]
-        private static extern IntPtr GetWindowLongPtr64(IntPtr hWnd, int nIndex);
-
-        [DllImport("user32.dll", EntryPoint = "SetWindowLong", SetLastError = true)]
-        private static extern int SetWindowLong32(IntPtr hWnd, int nIndex, int dwNewLong);
-
-        [DllImport("user32.dll", EntryPoint = "SetWindowLongPtr", SetLastError = true)]
-        private static extern IntPtr SetWindowLongPtr64(IntPtr hWnd, int nIndex, IntPtr dwNewLong);
-
+        [DllImport("user32.dll", SetLastError = true)]
+        private static extern int SetWindowLong(IntPtr hWnd, int nIndex, int dwNewLong);
         [DllImport("user32.dll", SetLastError = true)]
         private static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter,
             int X, int Y, int cx, int cy, uint uFlags);
@@ -49,60 +40,42 @@ namespace DropZoneApp
         private const uint SWP_NOZORDER = 0x0004;
         private const uint SWP_FRAMECHANGED = 0x0020;
 
-        private static int GetExStyle(IntPtr hWnd)
-        {
-            if (IntPtr.Size == 8) return (int)GetWindowLongPtr64(hWnd, GWL_EXSTYLE);
-            return GetWindowLong(hWnd, GWL_EXSTYLE);
-        }
-
-        private static void SetExStyle(IntPtr hWnd, int exStyle)
-        {
-            if (hWnd == IntPtr.Zero) return;
-            if (IntPtr.Size == 8)
-                SetWindowLongPtr64(hWnd, GWL_EXSTYLE, new IntPtr(exStyle));
-            else
-                SetWindowLong32(hWnd, GWL_EXSTYLE, exStyle);
-
-            SetWindowPos(hWnd, IntPtr.Zero, 0, 0, 0, 0,
-                SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
-        }
-
         private void SetClickThrough(bool enable)
         {
             if (!IsHandleCreated) return;
-
-            void apply(IntPtr handle)
+            try
             {
-                int ex = GetExStyle(handle);
+                int ex = GetWindowLong(Handle, GWL_EXSTYLE);
                 int newEx = enable ? (ex | WS_EX_TRANSPARENT) : (ex & ~WS_EX_TRANSPARENT);
-                if (newEx != ex) SetExStyle(handle, newEx);
+                if (newEx != ex)
+                {
+                    SetWindowLong(Handle, GWL_EXSTYLE, newEx);
+                    SetWindowPos(Handle, IntPtr.Zero, 0, 0, 0, 0,
+                        SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
+                }
+                _status.Enabled = !enable;
+                _progress.Enabled = !enable;
             }
-
-            apply(Handle);
-            foreach (Control c in Controls)
-                if (c.IsHandleCreated) apply(c.Handle);
-
-            _status.Enabled = !enable;
-            _progress.Enabled = !enable;
+            catch { }
         }
 
         private bool ShouldClickThrough()
         {
-            // Click-Through aktiv nur, wenn
-            // - Option aktiv
-            // - kein Drag aktiv
-            // - keine STRG-Taste (Verschieben)
-            // - keine Maustaste gedrückt (typ. Drag aus anderem Fenster)
             if (!_config.DockClickThrough) return false;
             if (_dragActive) return false;
             if ((ModifierKeys & Keys.Control) == Keys.Control) return false;
-            if (Control.MouseButtons != MouseButtons.None) return false;
+
+            // WICHTIG: Cursor im Fenster + Taste gedrückt -> Click‑Through AUS,
+            // damit DragEnter/Drop an uns zugestellt werden.
+            bool inside = Bounds.Contains(Cursor.Position);
+            bool mouseDown = Control.MouseButtons != MouseButtons.None;
+            if (inside && mouseDown) return false;
+
             return true;
         }
 
         private void UpdateClickThroughState() => SetClickThrough(ShouldClickThrough());
 
-        // STRG = Fenster greifen (verschieben); sonst HTTRANSPARENT-Fallback
         protected override void WndProc(ref Message m)
         {
             const int WM_NCHITTEST = 0x0084;
@@ -113,12 +86,12 @@ namespace DropZoneApp
             {
                 if ((ModifierKeys & Keys.Control) == Keys.Control)
                 {
-                    m.Result = (IntPtr)HTCAPTION; // drag-move
+                    m.Result = (IntPtr)HTCAPTION; // STRG = verschieben
                     return;
                 }
                 if (ShouldClickThrough())
                 {
-                    m.Result = (IntPtr)HTTRANSPARENT; // Maus an Fenster darunter
+                    m.Result = (IntPtr)HTTRANSPARENT; // Klicks durchreichen
                     return;
                 }
             }
@@ -137,7 +110,6 @@ namespace DropZoneApp
             Opacity = Math.Clamp(_config.DockOpacity, 0.1, 1.0);
             BackColor = Color.White;
             StartPosition = FormStartPosition.Manual;
-
             Size = new Size(Math.Max(60, _config.DockWidth), Math.Max(80, _config.DockHeight));
 
             if (_config.DockLeft.HasValue && _config.DockTop.HasValue)
@@ -172,38 +144,18 @@ namespace DropZoneApp
                 await HandleDropAsync(e.Data!);
             };
 
-            // NEU: Poll-Timer aktiviert/deaktiviert Click-Through, damit DragEnter überhaupt ankommt
-            _clickThroughTimer = new System.Windows.Forms.Timer { Interval = 60 };
-            _clickThroughTimer.Tick += (_, __) => UpdateClickThroughState();
-            _clickThroughTimer.Start();
-
             Move += (_, __) => SavePosition();
             Resize += (_, __) => SaveSize();
 
             DoubleClick += (_, __) => { _host.Show(); _host.Activate(); };
 
-            MouseDown += (s, e) =>
-            {
-                if ((ModifierKeys & Keys.Control) == Keys.Control && e.Button == MouseButtons.Left)
-                {
-                    _moving = true;
-                    _moveOffset = new Point(e.X, e.Y);
-                }
-                UpdateClickThroughState();
-            };
-            MouseUp += (s, e) =>
-            {
-                _moving = false;
-                UpdateClickThroughState();
-            };
-            MouseMove += (s, e) =>
-            {
-                if (_moving)
-                {
-                    var screenPos = PointToScreen(new Point(e.X, e.Y));
-                    Location = new Point(screenPos.X - _moveOffset.X, screenPos.Y - _moveOffset.Y);
-                }
-            };
+            MouseDown += (_, __) => UpdateClickThroughState();
+            MouseUp   += (_, __) => UpdateClickThroughState();
+
+            // Neu: proaktives Umschalten, damit DragEnter überhaupt ankommt
+            _hoverTimer = new System.Windows.Forms.Timer { Interval = 40 };
+            _hoverTimer.Tick += (_, __) => UpdateClickThroughState();
+            _hoverTimer.Start();
 
             HandleCreated += (_, __) => UpdateClickThroughState();
             Shown += (_, __) => UpdateClickThroughState();
