@@ -126,10 +126,12 @@ namespace DropZoneApp
             ShowInTaskbar = false;
             FormBorderStyle = FormBorderStyle.None;
             TopMost = true;
+
+            // **Fix**: Math.Max (nicht Math.max)
             Opacity = Math.Clamp(_config.DockOpacity, 0.1, 1.0);
             BackColor = Color.White;
             StartPosition = FormStartPosition.Manual;
-            Size = new Size(Math.max(60, _config.DockWidth), Math.max(80, _config.DockHeight));
+            Size = new Size(Math.Max(60, _config.DockWidth), Math.Max(80, _config.DockHeight)); // **Fix**
 
             if (_config.DockLeft.HasValue && _config.DockTop.HasValue)
                 Location = new Point(_config.DockLeft.Value, _config.DockTop.Value);
@@ -223,7 +225,7 @@ namespace DropZoneApp
             TopMost = true;
             Opacity = Math.Clamp(_config.DockOpacity, 0.1, 1.0);
             if (_config.DockWidth > 0 && _config.DockHeight > 0)
-                Size = new Size(_config.DockWidth, _config.DockHeight);
+                Size = new Size(Math.Max(60, _config.DockWidth), Math.Max(80, _config.DockHeight)); // **Fix**
             if (_config.DockLeft.HasValue && _config.DockTop.HasValue)
                 Location = new Point(_config.DockLeft.Value, _config.DockTop.Value);
             UpdateClickThroughState();
@@ -245,7 +247,6 @@ namespace DropZoneApp
 
                 if (_config.PulseAnimation) StartPulse();
 
-                // Fallback-Toast (falls MainForm keine Benachrichtigung zeigt)
                 if (_config.Notifications) Toast.Show("DropZone", "Ablage abgeschlossen", 3000);
             }
             catch (Exception ex)
