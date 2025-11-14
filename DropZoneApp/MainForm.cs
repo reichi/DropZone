@@ -200,7 +200,7 @@ namespace DropZoneApp
             menu.Items.AddRange(new ToolStripItem[] {
                 miShow, miOpen, miCleanup,
                 new ToolStripSeparator(),
-                miTop, miNotif, miAuto, miCloseExit,
+                miTop, miAuto,
                 new ToolStripSeparator(),
                 miDock, miHot, miSettings, miLog,
                 new ToolStripSeparator(),
