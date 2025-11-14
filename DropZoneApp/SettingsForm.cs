@@ -15,7 +15,7 @@ namespace DropZoneApp
         private CheckBox _chkTop = null!;
         private CheckBox _chkCloseToTray = null!;
         private CheckBox _chkMinToTray = null!;
-        private CheckBox _chkAuto = null!; // AUTOSTART (neu/reaktiviert)
+        private CheckBox _chkAuto = null!; // AUTOSTART
 
         private CheckBox _chkDock = null!;
         private NumericUpDown _numDockW = null!;
@@ -55,13 +55,12 @@ namespace DropZoneApp
             var lbl2 = new Label { Text = "Aufräumen nach (Tagen):", Left = 12, Top = 56, Width = 180 };
             _numDays = new NumericUpDown { Left = 198, Top = 53, Width = 80, Minimum = 1, Maximum = 3650, Value = Math.Max(1, _config.DaysToKeep) };
 
-            // --- Allgemein (AUTOSTART wieder drin) ---
+            // --- Allgemein ---
             var grpGeneral = new GroupBox { Text = "Allgemein", Left = 12, Top = 96, Width = 718, Height = 100 };
             _chkTop         = new CheckBox { Left = 12,  Top = 22, Width = 200, Text = "Immer im Vordergrund", Checked = _config.AlwaysOnTop };
             _chkCloseToTray = new CheckBox { Left = 240, Top = 22, Width = 170, Text = "Schließen → Tray",     Checked = _config.CloseToTray };
             _chkMinToTray   = new CheckBox { Left = 430, Top = 22, Width = 170, Text = "Minimieren → Tray",    Checked = _config.MinimizeToTray };
             _chkAuto        = new CheckBox { Left = 12,  Top = 50, Width = 200, Text = "Autostart",            Checked = (_config.AutoStart || AutostartService.IsEnabled()) };
-
             grpGeneral.Controls.AddRange(new Control[] { _chkTop, _chkCloseToTray, _chkMinToTray, _chkAuto });
 
             // --- Drop‑Zone ---
@@ -86,7 +85,7 @@ namespace DropZoneApp
             var btnDockColor = new Button { Left = 12, Top = 168, Width = 110, Text = "Rahmenfarbe…" };
             var numDockThick = new NumericUpDown { Left = 130, Top = 168, Width = 80, Minimum = 1, Maximum = 12, Value = Math.Max(1, _config.DockBorderThickness) };
             var _chkDockClick = new CheckBox { Left = 12, Top = 196, Width = 310, Text = "Klicks durchlassen (STRG = verschieben)", Checked = _config.DockClickThrough };
-            grpDock.Controls.AddRange(new Control[] { _chkDock, lblDW, _numDockW, _numDockH, _numDockOp, lblDO, _numDockIcon, lblDIcon, btnDockColor, numDockThick, _chkDockClick });
+            grpDock.Controls.AddRange(new Control[] { _chkDock, lblDW, _numDockW, lblDH, _numDockH, _numDockOp, lblDO, _numDockIcon, lblDIcon, btnDockColor, numDockThick, _chkDockClick });
 
             // --- Hot Corner ---
             var grpHot = new GroupBox { Text = "Hot Corner", Left = 12, Top = 386, Width = 350, Height = 220 };
@@ -140,7 +139,7 @@ namespace DropZoneApp
             _chkCloseToTray.CheckedChanged+= (_, __) => { _config.CloseToTray = _chkCloseToTray.Checked; _config.Save(); };
             _chkMinToTray.CheckedChanged  += (_, __) => { _config.MinimizeToTray = _chkMinToTray.Checked; _config.Save(); };
 
-            // AUTOSTART: auf Registry anwenden + speichern
+            // AUTOSTART
             _chkAuto.CheckedChanged += (_, __) => {
                 _config.AutoStart = _chkAuto.Checked;
                 AutostartService.Apply(_config.AutoStart);
@@ -159,6 +158,59 @@ namespace DropZoneApp
             _numHotSize.ValueChanged += (_, __) => { _config.HotCornerSize = (int)_numHotSize.Value; _config.Save(); _applyNow?.Invoke(); };
             _numHotOpacity.ValueChanged += (_, __) => { _config.HotCornerOpacity = (double)_numHotOpacity.Value / 100.0; _config.Save(); _applyNow?.Invoke(); };
             _numHotIcon.ValueChanged += (_, __) => { _config.IconSizeHotCorner = (int)_numHotIcon.Value; _config.Save(); _applyNow?.Invoke(); };
+
+            // === FEHLERBEHEBUNG: Events für Farbe & Rahmenstärke (alle drei Bereiche) ===
+
+            // Drop‑Zone
+            btnDZColor.Click += (_, __) =>
+            {
+                using var cd = new ColorDialog();
+                cd.Color = ColorUtil.FromHex(_config.DropBorderColorHex, Color.Gray);
+                if (cd.ShowDialog(this) == DialogResult.OK)
+                {
+                    _config.DropBorderColorHex = ColorUtil.ToHex(cd.Color);
+                    _config.Save(); _applyNow?.Invoke();
+                }
+            };
+            numDZThick.ValueChanged += (_, __) =>
+            {
+                _config.DropBorderThickness = (int)numDZThick.Value;
+                _config.Save(); _applyNow?.Invoke();
+            };
+
+            // Dock
+            btnDockColor.Click += (_, __) =>
+            {
+                using var cd = new ColorDialog();
+                cd.Color = ColorUtil.FromHex(_config.DockBorderColorHex, Color.Gray);
+                if (cd.ShowDialog(this) == DialogResult.OK)
+                {
+                    _config.DockBorderColorHex = ColorUtil.ToHex(cd.Color);
+                    _config.Save(); _applyNow?.Invoke();
+                }
+            };
+            numDockThick.ValueChanged += (_, __) =>
+            {
+                _config.DockBorderThickness = (int)numDockThick.Value;
+                _config.Save(); _applyNow?.Invoke();
+            };
+
+            // Hot Corner
+            btnHotColor.Click += (_, __) =>
+            {
+                using var cd = new ColorDialog();
+                cd.Color = ColorUtil.FromHex(_config.HotBorderColorHex, Color.Gray);
+                if (cd.ShowDialog(this) == DialogResult.OK)
+                {
+                    _config.HotBorderColorHex = ColorUtil.ToHex(cd.Color);
+                    _config.Save(); _applyNow?.Invoke();
+                }
+            };
+            numHotThick.ValueChanged += (_, __) =>
+            {
+                _config.HotBorderThickness = (int)numHotThick.Value;
+                _config.Save(); _applyNow?.Invoke();
+            };
 
             // Monitore befüllen
             _cmbMonitors.Items.Clear();
