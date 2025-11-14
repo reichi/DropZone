@@ -10,8 +10,8 @@ namespace DropZoneApp
             Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "Dropzone");
 
         public int  DaysToKeep       { get; set; } = 7;
-        public bool AlwaysOnTop      { get; set; } = true;
-        public bool Notifications    { get; set; } = true;
+        public bool AlwaysOnTop      { get; set; } = false;
+        public bool Notifications    { get; set; } = false;
         public bool CloseToTray    { get; set; } = true;  // Standard: an
         public bool MinimizeToTray { get; set; } = true;  // Standard: an
         public bool AutoStart      { get; set; } = true;  // Standard: an
@@ -23,20 +23,20 @@ namespace DropZoneApp
 
         public bool   DockEnabled    { get; set; } = false;
         public double DockOpacity    { get; set; } = 0.6;
-        public int    DockWidth      { get; set; } = 60;
-        public int    DockHeight     { get; set; } = 200;
+        public int    DockWidth      { get; set; } = 120;
+        public int    DockHeight     { get; set; } = 120;
         public int?   DockLeft       { get; set; }
         public int?   DockTop        { get; set; }
-        public int    IconSizeDock   { get; set; } = 48;
+        public int    IconSizeDock   { get; set; } = 100;
         public bool   DockClickThrough { get; set; } = true;
 
-        public string HotCornerCorner{ get; set; } = "TopLeft";
-        public bool   HotCornerEnabled{ get; set; } = false;
-        public int    HotCornerSize  { get; set; } = 8;
-        public double HotCornerOpacity { get; set; } = 0.02;
+        public string HotCornerCorner{ get; set; } = "BottomRight";
+        public bool   HotCornerEnabled{ get; set; } = true;
+        public int    HotCornerSize  { get; set; } = 50;
+        public double HotCornerOpacity { get; set; } = 0.3;
         public bool   HotCornerBlink { get; set; } = true;
         public int    HotCornerMonitor { get; set; } = 0;
-        public int    IconSizeHotCorner { get; set; } = 16;
+        public int    IconSizeHotCorner { get; set; } = 50;
 
         public int    IconSizeDropzone { get; set; } = 96;
 
@@ -50,7 +50,7 @@ namespace DropZoneApp
         public int    HotBorderThickness { get; set; } = 1;
 
         public bool PulseAnimation { get; set; } = true;
-        public int  PulseDurationMs { get; set; } = 350;
+        public int  PulseDurationMs { get; set; } = 700;
 
         private static readonly string ConfigDir =
             Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "DropZoneApp");
