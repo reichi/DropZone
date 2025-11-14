@@ -158,14 +158,6 @@ namespace DropZoneApp
                 _config.Save();
             };
 
-            var miNotif = new ToolStripMenuItem("Benachrichtigungen") { Checked = _config.Notifications };
-            miNotif.Click += (_, __) =>
-            {
-                _config.Notifications = !miNotif.Checked;
-                miNotif.Checked = _config.Notifications;
-                _config.Save();
-            };
-
             var miAuto = new ToolStripMenuItem("Autostart") { Checked = _config.AutoStart || AutostartService.IsEnabled() };
             miAuto.Click += (_, __) =>
             {
@@ -173,14 +165,6 @@ namespace DropZoneApp
                 _config.AutoStart = on;
                 miAuto.Checked = on;
                 AutostartService.Apply(on);
-                _config.Save();
-            };
-
-            var miCloseExit = new ToolStripMenuItem("Beim Schließen wirklich beenden") { Checked = !_config.CloseToTray };
-            miCloseExit.Click += (_, __) =>
-            {
-                // ToolStripMenuItem toggles Checked itself; reflect to config:
-                _config.CloseToTray = !miCloseExit.Checked;
                 _config.Save();
             };
 
