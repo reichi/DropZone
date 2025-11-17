@@ -1,7 +1,6 @@
 using System;
 using System.Drawing;
 using System.Drawing.Drawing2D;
-using System.Threading.Tasks;
 using System.Windows.Forms;
 using System.Runtime.InteropServices;
 
@@ -9,13 +8,33 @@ namespace DropZoneApp
 {
     public sealed class HotCornerForm : Form
     {
+        // --- Singleton: verhindert Mehrfach-Instanzen / 3x nebeneinander ---
+        private static HotCornerForm? s_current;
+
+        // --- Stabiles App-Icon (einmalig geladen, nicht disposed) ---
+        private static readonly Icon s_appIcon = LoadAppIcon();
+
+        private static Icon LoadAppIcon()
+        {
+            try
+            {
+                var ico = Icon.ExtractAssociatedIcon(Application.ExecutablePath);
+                return ico ?? SystemIcons.Application;
+            }
+            catch
+            {
+                return SystemIcons.Application;
+            }
+        }
+
         private readonly AppConfig _config;
         private readonly MainForm _host;
-        private System.Windows.Forms.Timer? _blinkTimer;
 
         private bool _dragActive;
-        private System.Windows.Forms.Timer? _hoverTimer; // proaktives Umschalten
+        private System.Windows.Forms.Timer? _hoverTimer;  // proaktives Umschalten für Click‑Through
+        private System.Windows.Forms.Timer? _blinkTimer;
 
+        // --- Click-Through via Extended Styles ---
         [DllImport("user32.dll", SetLastError = true)]
         private static extern int GetWindowLong(IntPtr hWnd, int nIndex);
         [DllImport("user32.dll", SetLastError = true)]
@@ -49,19 +68,32 @@ namespace DropZoneApp
 
         private bool ShouldClickThrough()
         {
-            if (_dragActive) return false;
+            if (_dragActive) return false; // während Drag: Drop-Ereignisse empfangen
+            // Wenn Cursor im Fenster und Maustaste gedrückt (externer Drag): nicht durchreichen
             bool inside = Bounds.Contains(Cursor.Position);
             bool mouseDown = Control.MouseButtons != MouseButtons.None;
-            if (inside && mouseDown) return false; // wichtig für DragEnter
+            if (inside && mouseDown) return false;
             return true;
         }
 
         private void UpdateClickThrough() => SetClickThrough(ShouldClickThrough());
 
+        // --- Konstruktor ---
         public HotCornerForm(AppConfig config, MainForm host)
         {
+            // Singleton-Schutz: alte Instanz schließen/entsorgen
+            if (s_current != null && !s_current.IsDisposed)
+            {
+                try { s_current.Close(); s_current.Dispose(); } catch { }
+            }
+            s_current = this;
+
             _config = config;
             _host = host;
+
+            // Flackerfrei zeichnen, nur einmaliger Paint-Pfad (kein += Paint-Handler mehr)
+            SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.UserPaint, true);
+            UpdateStyles();
 
             ShowInTaskbar = false;
             FormBorderStyle = FormBorderStyle.None;
@@ -70,39 +102,13 @@ namespace DropZoneApp
 
             BackColor = Color.Black;
             Opacity = Math.Max(0.01, Math.Min(1.0, _config.HotCornerOpacity));
-            Width = Math.Max(4, _config.HotCornerSize);
+            Width  = Math.Max(4, _config.HotCornerSize);
             Height = Math.Max(4, _config.HotCornerSize);
 
             AllowDrop = true;
             ApplyPosition();
 
-            Paint += (s, e) =>
-            {
-                try
-                {
-                    var g = e.Graphics; g.SmoothingMode = SmoothingMode.AntiAlias;
-                    var baseColor = ColorUtil.FromHex(_config.HotBorderColorHex, Color.Gray);
-                    using var pen = new Pen(baseColor, Math.Max(1, _config.HotBorderThickness));
-                    var rr = new Rectangle(0, 0, ClientSize.Width - 1, ClientSize.Height - 1);
-                    g.DrawRectangle(pen, rr);
-
-                    using var appIco = Icon.ExtractAssociatedIcon(Application.ExecutablePath);
-                    if (appIco != null)
-                    {
-                        using var bmp = appIco.ToBitmap();
-                        int cfg = Math.Max(8, _config.IconSizeHotCorner);
-                        int size = Math.Min(cfg, Math.Min(ClientSize.Width, ClientSize.Height) - 2);
-                        size = Math.Max(8, size);
-                        var dest = new Rectangle((ClientSize.Width - size) / 2, (ClientSize.Height - size) / 2, size, size);
-                        var old = g.InterpolationMode;
-                        g.InterpolationMode = InterpolationMode.HighQualityBicubic;
-                        g.DrawImage(bmp, dest);
-                        g.InterpolationMode = old;
-                    }
-                }
-                catch { }
-            };
-
+            // Drag&Drop
             DragEnter += (s, e) =>
             {
                 _dragActive = true;
@@ -110,18 +116,64 @@ namespace DropZoneApp
                 e.Effect = HasSupportedFormats(e.Data) ? DragDropEffects.Copy : DragDropEffects.None;
             };
             DragLeave += (s, e) => { _dragActive = false; UpdateClickThrough(); };
-            DragDrop += async (s, e) =>
+            DragDrop  += async (s, e) =>
             {
                 _dragActive = false; UpdateClickThrough();
                 await HandleDropAsync(e.Data!);
             };
 
+            // Polling, damit bei gedrückter Taste (externer Drag) der Stil rechtzeitig umgeschaltet wird
             _hoverTimer = new System.Windows.Forms.Timer { Interval = 40 };
             _hoverTimer.Tick += (_, __) => UpdateClickThrough();
             _hoverTimer.Start();
 
-            Shown += (s, e) => UpdateClickThrough();
-            HandleCreated += (s, e) => UpdateClickThrough();
+            HandleCreated += (_, __) => UpdateClickThrough();
+            Shown += (_, __) => { UpdateClickThrough(); Invalidate(); };
+        }
+
+        protected override void OnFormClosed(EventArgs e)
+        {
+            if (ReferenceEquals(s_current, this)) s_current = null;
+            base.OnFormClosed(e);
+        }
+
+        // Hintergrund sauber löschen (verhindert Ghosting)
+        protected override void OnPaintBackground(PaintEventArgs e)
+        {
+            e.Graphics.Clear(BackColor);
+        }
+
+        // EINZIGER Zeichenpfad: Rahmen + Icon
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            var g = e.Graphics;
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+
+            // Rahmen zeichnen
+            using (var pen = new Pen(ColorUtil.FromHex(_config.HotBorderColorHex, Color.Gray),
+                                     Math.Max(1, _config.HotBorderThickness)))
+            {
+                var rr = new Rectangle(0, 0, ClientSize.Width - 1, ClientSize.Height - 1);
+                g.DrawRectangle(pen, rr);
+            }
+
+            // App-Icon mittig zeichnen (stabil, ohne Mehrfach-Zeichnung)
+            try
+            {
+                int cfg = Math.Max(8, _config.IconSizeHotCorner);
+                int size = Math.Min(cfg, Math.Min(ClientSize.Width, ClientSize.Height) - 2);
+                size = Math.Max(8, size);
+
+                var dest = new Rectangle(
+                    (ClientSize.Width  - size) / 2,
+                    (ClientSize.Height - size) / 2,
+                    size, size);
+
+                // Icon direkt zeichnen (kein mehrfaches ToBitmap/Dispose nötig)
+                g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+                g.DrawIcon(s_appIcon, dest);
+            }
+            catch { }
         }
 
         private static bool HasSupportedFormats(IDataObject? data)
@@ -133,7 +185,7 @@ namespace DropZoneApp
                 || data.GetDataPresent("RenPrivateMessages");
         }
 
-        private async Task HandleDropAsync(IDataObject data)
+        private async System.Threading.Tasks.Task HandleDropAsync(IDataObject data)
         {
             try
             {
@@ -151,8 +203,8 @@ namespace DropZoneApp
             ApplyPosition();
             TopMost = true;
             BringToFront();
-            Invalidate();
             UpdateClickThrough();
+            Invalidate();
         }
 
         private void ApplyPosition()
@@ -178,7 +230,10 @@ namespace DropZoneApp
                 double orig = Opacity;
                 double target = Math.Min(1.0, Math.Max(orig, orig * 4.0));
                 Opacity = target;
+
                 _blinkTimer?.Stop();
+                _blinkTimer?.Dispose();
+
                 _blinkTimer = new System.Windows.Forms.Timer { Interval = 120 };
                 _blinkTimer.Tick += (s, e) =>
                 {
