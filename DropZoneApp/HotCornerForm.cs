@@ -4,7 +4,6 @@ using System.Drawing.Drawing2D;
 using System.Runtime.InteropServices;
 using System.Threading.Tasks;
 using System.Windows.Forms;
-using Microsoft.Win32;
 
 namespace DropZoneApp
 {
@@ -21,7 +20,6 @@ namespace DropZoneApp
         private System.Windows.Forms.Timer? _hoverTimer;
 
         private bool _dragActive;
-        private bool _adjustingSize;  // schützt vor Rekursion in SizeChanged
 
         // Stabiler Icon-Cache
         private Bitmap? _iconBitmapCached;
@@ -56,11 +54,12 @@ namespace DropZoneApp
             _config = config;
             _host   = host;
 
-            // Flackerfrei zeichnen
+            // Flackerfrei & keine automatische Größen-Skalierung
             SetStyle(ControlStyles.AllPaintingInWmPaint |
                      ControlStyles.OptimizedDoubleBuffer |
                      ControlStyles.UserPaint, true);
             DoubleBuffered = true;
+            AutoScaleMode  = AutoScaleMode.None;
 
             ShowInTaskbar = false;
             FormBorderStyle = FormBorderStyle.None;
@@ -70,14 +69,11 @@ namespace DropZoneApp
             BackColor = Color.Black;
             Opacity   = ClampOpacity(_config.HotCornerOpacity);
 
-            // **Quadrat** initial erzwingen
-            EnsureSquareFromConfig();
-
+            ApplySquareSize();       // **Breite=Höhe fixieren**
             AllowDrop = true;
 
-            // vorläufig positionieren, danach "spät" nochmals korrekt
+            // Erste Position (wird nach Handle/Shown nochmals sauber justiert)
             ApplyPosition();
-            ClampIntoTargetWorkArea();
             PrepareIconCache();
 
             // Rendering
@@ -102,97 +98,63 @@ namespace DropZoneApp
             _hoverTimer.Tick += (_, __) => UpdateClickThrough();
             _hoverTimer.Start();
 
-            // ***** WICHTIG: nach endgültigem Layout/DPI nochmals Größe (quadrat) + Position setzen *****
+            // **Wichtig**: Nach finaler Größen-/DPI-Init nochmals Größe & Position fixen
             HandleCreated += (_, __) =>
             {
-                PrepareIconCache();
                 BeginInvoke(new Action(() =>
                 {
-                    EnsureSquareFromConfig();
+                    ApplySquareSize();
+                    PrepareIconCache();
                     ApplyPosition();
-                    ClampIntoTargetWorkArea();
                     UpdateClickThrough();
                     Invalidate();
                 }));
             };
-
             Shown += (_, __) =>
             {
-                BeginInvoke(new Action(() =>
-                {
-                    EnsureSquareFromConfig();
-                    ApplyPosition();
-                    ClampIntoTargetWorkArea();
-                    UpdateClickThrough();
-                    Invalidate();
-                }));
+                ApplySquareSize();
+                ApplyPosition();
+                UpdateClickThrough();
+                Invalidate();
+
+                // Späte Runde, falls DPI/Layout noch nachzieht
+                var t = new System.Windows.Forms.Timer { Interval = 60 };
+                t.Tick += (s2, e2) => { t.Stop(); t.Dispose(); ApplySquareSize(); ApplyPosition(); Invalidate(); };
+                t.Start();
             };
 
-            // Bei Größen-/DPI-/Display-Änderungen immer wieder Quadrat + Clamp
-            SizeChanged += (_, __) =>
+            // Bei DPI-Wechsel (Per-Monitor-DPI): Größe & Position neu
+            this.DpiChanged += (_, __) =>
             {
-                if (_adjustingSize) return;
-                _adjustingSize = true;
-                try
-                {
-                    EnsureSquareFromCurrent();
-                    ClampIntoTargetWorkArea();
-                }
-                finally { _adjustingSize = false; }
-            };
-
-            DpiChanged += (_, __) =>
-            {
+                ApplySquareSize();
                 PrepareIconCache();
-                BeginInvoke(new Action(() =>
-                {
-                    EnsureSquareFromConfig();
-                    ApplyPosition();
-                    ClampIntoTargetWorkArea();
-                    Invalidate();
-                }));
-            };
-
-            SystemEvents.DisplaySettingsChanged += (_, __) =>
-            {
-                BeginInvoke(new Action(() =>
-                {
-                    EnsureSquareFromConfig();
-                    ApplyPosition();
-                    ClampIntoTargetWorkArea();
-                    Invalidate();
-                }));
+                ApplyPosition();
+                Invalidate();
             };
         }
 
-        // ===== Öffentliche API =====
+        // ---- Öffentliche API (von Settings genutzt) ----
         public void ApplyConfig()
         {
-            EnsureSquareFromConfig();
             Opacity = ClampOpacity(_config.HotCornerOpacity);
-            ApplyPosition();
-            ClampIntoTargetWorkArea();
+            ApplySquareSize();       // **immer** quadratisch setzen
+            PrepareIconCache();
+            ApplyPosition();         // korrekt in WorkingArea einklemmen
             TopMost = true;
             BringToFront();
-            PrepareIconCache();
             UpdateClickThrough();
             Invalidate();
         }
 
-        // ===== Rendering =====
-        protected override void OnPaintBackground(PaintEventArgs e)
-        {
-            e.Graphics.Clear(BackColor);
-        }
-
-        protected override void OnPaint(PaintEventArgs e)
+        // ---- Rendering ----
+        private void OnPaintHotCorner(object? sender, PaintEventArgs e)
         {
             var g = e.Graphics;
             g.SmoothingMode = SmoothingMode.AntiAlias;
 
             // Rahmen
             using (var pen = new Pen(ColorUtil.FromHex(_config.HotBorderColorHex, Color.Gray),
-                                     Math.Max(1, _config.HotBorderThickness)))
+                                     System.Math.Max(1, _config.HotBorderThickness)))
             {
                 var rr = new Rectangle(0, 0, ClientSize.Width - 1, ClientSize.Height - 1);
                 g.DrawRectangle(pen, rr);
@@ -204,9 +166,9 @@ namespace DropZoneApp
                 var bmp = _iconBitmapCached;
                 if (bmp != null)
                 {
-                    int cfg  = Math.Max(8, _config.IconSizeHotCorner);
-                    int size = Math.Min(cfg, Math.Min(ClientSize.Width, ClientSize.Height) - 2);
-                    size = Math.Max(8, size);
+                    int cfg  = System.Math.Max(8, _config.IconSizeHotCorner);
+                    int size = System.Math.Min(cfg, System.Math.Min(ClientSize.Width, ClientSize.Height) - 2);
+                    size = System.Math.Max(8, size);
 
                     var dest = new Rectangle(
                         (ClientSize.Width  - size) / 2,
@@ -222,13 +184,12 @@ namespace DropZoneApp
             catch { }
         }
 
-        // ===== Click‑Through =====
-        private double ClampOpacity(double o) => Math.Max(0.01, Math.Min(1.0, o));
+        // ---- Click‑Through ----
+        private double ClampOpacity(double o) => System.Math.Max(0.01, System.Math.Min(1.0, o));
 
         private bool ShouldClickThrough()
         {
             if (_dragActive) return false;
-            // Bei gedrückter Maustaste im Fenster → Drop annehmen, daher nicht durchreichen
             bool inside = Bounds.Contains(Cursor.Position);
             bool mouseDown = Control.MouseButtons != MouseButtons.None;
             if (inside && mouseDown) return false;
@@ -251,9 +212,10 @@ namespace DropZoneApp
             }
             catch { }
         }
+
         private void UpdateClickThrough() => SetClickThrough(ShouldClickThrough());
 
-        // ===== Drop =====
+        // ---- Drop‑Handling ----
         private static bool HasSupportedFormats(IDataObject? data)
         {
             if (data == null) return false;
@@ -278,7 +240,7 @@ namespace DropZoneApp
             try
             {
                 double orig = Opacity;
-                double target = Math.Min(1.0, Math.Max(orig, orig * 4.0));
+                double target = System.Math.Min(1.0, System.Math.Max(orig, orig * 4.0));
                 Opacity = target;
                 _blinkTimer?.Stop();
                 _blinkTimer = new System.Windows.Forms.Timer { Interval = 120 };
@@ -294,28 +256,32 @@ namespace DropZoneApp
             catch { }
         }
 
-        // ===== Größe/Position =====
-        private void EnsureSquareFromConfig()
+        // ---- Größe & Position ----
+        /// <summary>
+        /// Erzwingt eine quadratische Größe gem. Config und sperrt sie über Min/MaxSize.
+        /// Dadurch kann die Form nach dem Start nicht "breiter als hoch" werden.
+        /// </summary>
+        private void ApplySquareSize()
         {
-            int s = Math.Max(4, _config.HotCornerSize);
-            if (Width != s || Height != s) Size = new Size(s, s);
-        }
+            int s = System.Math.Max(4, _config.HotCornerSize);
+            if (Width != s || Height != s)
+                Size = new Size(s, s);
 
-        private void EnsureSquareFromCurrent()
-        {
-            int s = Math.Min(Math.Max(4, Width), Math.Max(4, Height));
-            if (Width != s || Height != s) Size = new Size(s, s);
+            // **hart** quadratisch halten (bis nächste Konfig‑Änderung)
+            MinimumSize = new Size(s, s);
+            MaximumSize = new Size(s, s);
         }
 
         private void ApplyPosition()
         {
-            var scr = GetTargetScreen();
-            var wa  = scr.WorkingArea; // ohne Taskleiste
+            var wa = GetWorkingAreaForIndex(_config.HotCornerMonitor);
+            if (wa == Rectangle.Empty) return;
 
-            string corner = _config.HotCornerCorner ?? "TopLeft";
-            int w = Width, h = Height;
+            int w = Width;
+            int h = Height;
+
             int x, y;
-
+            string corner = _config.HotCornerCorner ?? "TopLeft";
             switch (corner)
             {
                 case "TopRight":
@@ -327,35 +293,27 @@ namespace DropZoneApp
                 default: // TopLeft
                     x = wa.Left + 1; y = wa.Top + 1; break;
             }
-            Location = new Point(x, y);
-        }
 
-        private void ClampIntoTargetWorkArea()
-        {
-            var wa = GetTargetScreen().WorkingArea;
-            int x = Location.X;
-            int y = Location.Y;
-
-            if (x < wa.Left) x = wa.Left + 1;
-            if (y < wa.Top)  y = wa.Top  + 1;
-            if (x + Width  > wa.Right)  x = wa.Right  - Width  - 1;
-            if (y + Height > wa.Bottom) y = wa.Bottom - Height - 1;
+            // Clamp in die WorkingArea (kein Herausstehen, auch bei negativen X)
+            x = System.Math.Min(System.Math.Max(wa.Left + 1, x), wa.Right  - w - 1);
+            y = System.Math.Min(System.Math.Max(wa.Top  + 1, y), wa.Bottom - h - 1);
 
             Location = new Point(x, y);
         }
 
-        private Screen GetTargetScreen()
+        private Rectangle GetWorkingAreaForIndex(int idx)
         {
             var screens = Screen.AllScreens;
-            if (screens.Length == 0) return Screen.PrimaryScreen!;
-            int idx = Math.Max(0, Math.Min(_config.HotCornerMonitor, screens.Length - 1));
-            return screens[idx];
+            if (screens.Length == 0)
+                return Screen.PrimaryScreen?.WorkingArea ?? Rectangle.Empty;
+
+            idx = System.Math.Max(0, System.Math.Min(idx, screens.Length - 1));
+            return screens[idx].WorkingArea;
         }
 
-        // ===== Icon-Cache =====
         private void PrepareIconCache()
         {
-            try { _iconBitmapCached?.Dispose(); } catch { /* ignore */ }
+            try { _iconBitmapCached?.Dispose(); } catch { }
             _iconBitmapCached = null;
 
             try
@@ -369,19 +327,20 @@ namespace DropZoneApp
             }
             catch { }
 
-            try { _iconBitmapCached = SystemIcons.Application.ToBitmap(); }
-            catch { _iconBitmapCached = null; }
+            try { _iconBitmapCached = SystemIcons.Application.ToBitmap(); } catch { _iconBitmapCached = null; }
         }
 
-        // ===== Lifecycle =====
+        // ---- Lebenszyklus ----
         protected override void OnFormClosed(FormClosedEventArgs e)
         {
             base.OnFormClosed(e);
-            lock (_guard) { if (_active == this) _active = null; }
+            lock (_guard)
+            {
+                if (_active == this) _active = null;
+            }
             try { _hoverTimer?.Stop(); _hoverTimer?.Dispose(); } catch { }
             try { _blinkTimer?.Stop(); _blinkTimer?.Dispose(); } catch { }
             try { _iconBitmapCached?.Dispose(); } catch { }
-            try { SystemEvents.DisplaySettingsChanged -= (_, __) => { }; } catch { }
         }
     }
 }
